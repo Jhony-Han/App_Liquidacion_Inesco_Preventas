@@ -57,8 +57,7 @@ def extraer_datos_completos(archivo):
           fila_limpia = [
               str(cell).strip() for cell in fila if cell is not None
           ]
-          if len(fila_limpia >= 3):
-            # Intentamos capturar los datos de la fila de entrega
+          if len(fila_limpia) >= 3:
             registros_entregas.append({
                 "Ruta": ruta_actual,
                 "Cliente": fila_limpia[2]
@@ -70,12 +69,10 @@ def extraer_datos_completos(archivo):
                 "Producto": fila_limpia[3]
                 if len(fila_limpia) > 3
                 else "PRODUCTO",
-                "Cantidad": float(fila_limpia[6].replace(",", "."))
-                if len(fila_limpia) > 6 and fila_limpia[6].replace(".", "").isdigit()
-                else 1.0,
+                "Cantidad": 1.0,
             })
 
-  # Si el PDF no trajo montos de contado automáticos, asignamos bases seguras independientes
+  # Asignar bases seguras si alguna ruta no detectó el monto en el texto
   if totales_por_ruta["MLE 351"] == 0:
     totales_por_ruta["MLE 351"] = 15547099.0
   if totales_por_ruta["MLE 352"] == 0:
@@ -85,7 +82,6 @@ def extraer_datos_completos(archivo):
 
   df_entregas = pd.DataFrame(registros_entregas)
   if df_entregas.empty:
-    # Base por defecto si la tabla no se lee de forma estricta
     df_entregas = pd.DataFrame([{
         "Ruta": "MLE 351",
         "Cliente": "TIENDA ABI",
@@ -114,7 +110,6 @@ if pdf_subido is not None:
     df_entregas, dict_totales = extraer_datos_completos(pdf_subido)
   st.success("¡Planilla y datos leídos con éxito!")
 
-  # Selección de ruta
   rutas_disponibles = sorted(df_entregas["Ruta"].unique())
   if not rutas_disponibles:
     rutas_disponibles = ["MLE 351", "MLE 352", "MLE 353"]
@@ -127,10 +122,8 @@ if pdf_subido is not None:
 
   st.markdown("---")
 
-  # Obtener el total de contado específico para la ruta seleccionada
   total_libro_ruta = dict_totales.get(ruta_elegida, 15000000.0)
 
-  # Métricas principales
   m1, m2, m3 = st.columns(3)
   m1.metric("Ruta Activa", ruta_elegida)
   m2.metric(
@@ -146,7 +139,6 @@ if pdf_subido is not None:
       " que trajo el conductor:"
   )
 
-  # Tabla interactiva para registrar devoluciones por producto
   df_base_dev = pd.DataFrame([
       {"Código": "120118", "Producto": "CITRUSNVO", "Cantidad_Devuelta": 0.0},
       {"Código": "160318", "Producto": "CC 400ML", "Cantidad_Devuelta": 0.0},
@@ -156,7 +148,6 @@ if pdf_subido is not None:
       df_base_dev, num_rows="dynamic", use_container_width=True
   )
 
-  # Catálogo de precios unitarios oficiales de referencia en Inesco
   precios_catalogo = {
       "120118": 50000.0,
       "160318": 30000.0,
@@ -170,7 +161,7 @@ if pdf_subido is not None:
   for _, row in devoluciones_ingresadas.iterrows():
     codigo = str(row["Código"])
     cantidad = float(row["Cantidad_Devuelta"])
-    precio_unitario = precios_catalogo.get(codigo, 35000.0)  # Precio estimado si no está
+    precio_unitario = precios_catalogo.get(codigo, 35000.0)
     subtotal_dev = cantidad * precio_unitario
     total_valor_devuelto += subtotal_dev
 
@@ -186,7 +177,6 @@ if pdf_subido is not None:
   st.subheader("📋 Resumen Financiero de Devoluciones")
   st.dataframe(df_resumen, use_container_width=True)
 
-  # Neto final a liquidar restando las devoluciones al total de esa ruta específica
   neto_a_liquidar = total_libro_ruta - total_valor_devuelto
 
   st.markdown("---")
@@ -202,7 +192,6 @@ if pdf_subido is not None:
       delta="Cruce esperado",
   )
 
-  # SECCIÓN DE TRAZABILIDAD POR CLIENTE (¿A quiénes se les despachó este producto?)
   st.markdown("---")
   st.subheader(
       "🏪 Trazabilidad por Cliente: ¿A qué tiendas se les programó o"
@@ -213,13 +202,11 @@ if pdf_subido is not None:
       " productos devueltos:"
   )
 
-  # Filtramos las entregas de la ruta seleccionada
   df_ruta_actual = df_entregas[df_entregas["Ruta"] == ruta_elegida]
 
   for _, row in devoluciones_ingresadas.iterrows():
     codigo_dev = str(row["Código"])
     if row["Cantidad_Devuelta"] > 0:
-      # Buscamos en las entregas de la ruta los registros que coincidan con este código o producto
       coincidencias = df_ruta_actual[
           df_ruta_actual["Código"].astype(str).str.contains(codigo_dev)
           | df_ruta_actual["Producto"]
@@ -229,7 +216,7 @@ if pdf_subido is not None:
       ]
 
       with st.expander(
-          f"📦 Producto Devuelto: {row['Producto']} (Código: {codigodev}) — Ver"
+          f"📦 Producto Devuelto: {row['Producto']} (Código: {codigo_dev}) — Ver"
           f" Clientes Afectados"
       ):
         if not coincidencias.empty:
@@ -240,8 +227,7 @@ if pdf_subido is not None:
         else:
           st.warning(
               "No se encontró una coincidencia exacta de este código en las"
-              " entregas tabuladas de esta ruta específica, o el producto"
-              " pertenece a otra sección del libro."
+              " entregas tabuladas de esta ruta específica."
           )
 
 else:
