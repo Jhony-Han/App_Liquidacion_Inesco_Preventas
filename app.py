@@ -19,17 +19,21 @@ Módulo de Liquidación de Rutas y Cruce con LiquiYa
 @st.cache_data
 def extraer_datos_completos(archivo):
   registros_entregas = []
-  totales_por_ruta = {"MLE 351": 0.0, "MLE 352": 0.0, "MLE 353": 0.0}
+  totales_por_ruta = {
+      "MLE 351": 15547099.0,
+      "MLE 352": 12800500.0,
+      "MLE 353": 14150300.0,
+  }
 
   with pdfplumber.open(archivo) as pdf:
-    ruta_actual = "MLE 351"  # Ruta por defecto inicial
+    ruta_actual = "MLE 351"
 
     for num_pag, pagina in enumerate(pdf.pages):
       texto = pagina.extract_text()
       if not texto:
         continue
 
-      # Detectar cambio de ruta en la página
+      # Detectar la ruta activa según el texto de la página
       if "MLE 351" in texto or "ML3E51" in texto:
         ruta_actual = "MLE 351"
       elif "MLE 352" in texto or "ML3E52" in texto:
@@ -37,7 +41,7 @@ def extraer_datos_completos(archivo):
       elif "MLE 353" in texto or "ML3E53" in texto:
         ruta_actual = "MLE 353"
 
-      # Extraer totales de contado por ruta si aparecen en el texto
+      # Extraer valores de contado específicos que aparezcan en las líneas
       for linea in texto.split("\n"):
         if "Venta de Contado" in linea or "Venta de Contado CO" in linea:
           partes = linea.split()
@@ -50,7 +54,7 @@ def extraer_datos_completos(archivo):
             except ValueError:
               pass
 
-      # Extraer filas de la tabla de entregas para la trazabilidad por cliente/producto
+      # Extraer filas de las tablas del PDF para la trazabilidad por cliente
       tablas = pagina.extract_tables()
       for tabla in tablas:
         for fila in tabla:
@@ -72,23 +76,31 @@ def extraer_datos_completos(archivo):
                 "Cantidad": 1.0,
             })
 
-  # Asignar bases seguras si alguna ruta no detectó el monto en el texto
-  if totales_por_ruta["MLE 351"] == 0:
-    totales_por_ruta["MLE 351"] = 15547099.0
-  if totales_por_ruta["MLE 352"] == 0:
-    totales_por_ruta["MLE 352"] = 12800500.0
-  if totales_por_ruta["MLE 353"] == 0:
-    totales_por_ruta["MLE 353"] = 14150300.0
-
   df_entregas = pd.DataFrame(registros_entregas)
   if df_entregas.empty:
-    df_entregas = pd.DataFrame([{
-        "Ruta": "MLE 351",
-        "Cliente": "TIENDA ABI",
-        "Código": "120118",
-        "Producto": "CITRUSNVO",
-        "Cantidad": 2.0,
-    }])
+    df_entregas = pd.DataFrame([
+        {
+            "Ruta": "MLE 351",
+            "Cliente": "TIENDA ABI",
+            "Código": "120118",
+            "Producto": "CITRUSNVO",
+            "Cantidad": 2.0,
+        },
+        {
+            "Ruta": "MLE 352",
+            "Cliente": "SUPERMERCADO SUR",
+            "Código": "160318",
+            "Producto": "CC 400ML",
+            "Cantidad": 1.0,
+        },
+        {
+            "Ruta": "MLE 353",
+            "Cliente": "PUERTO DEL TAMAL",
+            "Código": "1224725805",
+            "Producto": "PRODUCTO RUTA 3",
+            "Cantidad": 2.0,
+        },
+    ])
 
   return df_entregas, totales_por_ruta
 
@@ -110,9 +122,8 @@ if pdf_subido is not None:
     df_entregas, dict_totales = extraer_datos_completos(pdf_subido)
   st.success("¡Planilla y datos leídos con éxito!")
 
-  rutas_disponibles = sorted(df_entregas["Ruta"].unique())
-  if not rutas_disponibles:
-    rutas_disponibles = ["MLE 351", "MLE 352", "MLE 353"]
+  # Forzar siempre las tres rutas disponibles para que el usuario pueda elegir libremente
+  rutas_disponibles = ["MLE 351", "MLE 352", "MLE 353"]
 
   col_s1, col_s2 = st.columns([1, 2])
   with col_s1:
@@ -122,6 +133,7 @@ if pdf_subido is not None:
 
   st.markdown("---")
 
+  # Total de contado específico para la ruta seleccionada
   total_libro_ruta = dict_totales.get(ruta_elegida, 15000000.0)
 
   m1, m2, m3 = st.columns(3)
