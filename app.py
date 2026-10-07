@@ -48,7 +48,6 @@ def extraer_datos_completos(archivo):
       # Extracción precisa de totales al final de los reportes/rutas
       for i, linea in enumerate(lineas):
         if "Total a Cobrar" in linea or "Total a Cobrar Cont/Prom" in linea:
-          # Buscar números en la misma línea o en la siguiente
           partes = linea.split()
           for p in partes:
             p_limpio = p.replace(".", "").replace(",", ".")
@@ -59,9 +58,8 @@ def extraer_datos_completos(archivo):
             except ValueError:
               pass
 
-      # Barrido de líneas para capturar clientes y bloques de tablas
+      # Barrido de líneas para capturar clientes
       for i, linea in enumerate(lineas):
-        # Detectar nombres de clientes (usualmente líneas antes de 'Ruta:' o códigos de cliente de 4 dígitos)
         if "Fecha de Entrega:" in linea or "Ruta:" in linea:
           if i >= 2:
             posible_cliente = lineas[i - 2].strip()
@@ -83,14 +81,12 @@ def extraer_datos_completos(archivo):
             importe_total = 0.0
 
             for cell in fila_limpia:
-              # Código de producto (4 a 10 dígitos)
               if cell.isdigit() and 4 <= len(cell) <= 10:
                 codigo_encontrado = cell
               elif not cell.isdigit() and len(cell) > 2 and "Venta" not in cell and "Ruta" not in cell and "SUB" not in cell:
                 if producto_encontrado == "":
                   producto_encontrado = cell
 
-              # Detectar formato cajas / botellas (ej. "0 / 15" o similar)
               if "/" in cell:
                 partes_cb = cell.split("/")
                 try:
@@ -100,7 +96,6 @@ def extraer_datos_completos(archivo):
                 except ValueError:
                   pass
 
-              # Limpiar y detectar importe
               cell_num_clean = cell.replace(".", "").replace(",", ".").replace("$", "")
               try:
                 num = float(cell_num_clean)
@@ -110,7 +105,6 @@ def extraer_datos_completos(archivo):
                 pass
 
             if codigo_encontrado:
-              # Calcular total de unidades equivalentes en botella o divisor unitario
               total_unidades_base = (cajas_fila * 15.0) + botellas_fila if (cajas_fila > 0 or botellas_fila > 0) else 15.0
               if total_unidades_base == 0:
                 total_unidades_base = 15.0
@@ -191,10 +185,9 @@ if pdf_subido is not None:
       f"🔄 Registro de Devoluciones del Camión - Ruta {ruta_elegida}"
   )
   st.write(
-      "Ingresa el código del producto y separa las cantidades en **Cajas Devueltas** y **Botellas Devueltas** para evitar confusiones:"
+      "Ingresa el código del producto y separa las cantidades en **Cajas Devueltas** y **Botellas Devueltas**:"
   )
 
-  # Tabla de entrada limpia con columnas separadas para cajas y botellas
   df_base_dev = pd.DataFrame([
       {"Código": "056624", "Cajas_Devueltas": 0.0, "Botellas_Devueltas": 2.0},
   ])
@@ -207,9 +200,21 @@ if pdf_subido is not None:
   total_valor_devuelto = 0.0
 
   for _, row in devoluciones_ingresadas.iterrows():
-    codigo = str(row["Código"]).strip()
-    cajas_dev = float(row["Cajas_Devueltas"])
-    botellas_dev = float(row["Botellas_Devueltas"])
+    codigo_raw = row["Código"]
+    if codigo_raw is None or str(codigo_raw).strip() == "" or str(codigo_raw).lower() == "none":
+      continue
+    
+    codigo = str(codigo_raw).strip()
+    
+    # Manejo seguro de valores nulos o vacíos en el editor
+    val_cajas = row["Cajas_Devueltas"]
+    cajas_dev = float(val_cajas) if (val_cajas is not None and str(val_cajas).lower() != "none") else 0.0
+
+    val_botellas = row["Botellas_Devueltas"]
+    botellas_dev = float(val_botellas) if (val_botellas is not None and str(val_botellas).lower() != "none") else 0.0
+
+    if cajas_dev == 0.0 and botellas_dev == 0.0:
+      continue
 
     coincidencias = df_ruta_actual[df_ruta_actual["Código"].astype(str) == codigo]
 
@@ -224,7 +229,6 @@ if pdf_subido is not None:
     elif codigo == "056624":
       precio_unitario = 1200.0
 
-    # Total de unidades devueltas (asumiendo caja de 15 unidades o según proporción)
     total_unidades_dev = (cajas_dev * 15.0) + botellas_dev
     subtotal_dev = total_unidades_dev * precio_unitario
     total_valor_devuelto += subtotal_dev
@@ -238,16 +242,19 @@ if pdf_subido is not None:
         "Subtotal Devolución": subtotal_dev,
     })
 
-  df_resumen = pd.DataFrame(resumen_devoluciones)
-
-  st.subheader("📋 Resumen Financiero de Devoluciones")
-  st.dataframe(
-      df_resumen.style.format({
-          "Precio Unitario": "${:,.2f}",
-          "Subtotal Devolución": "${:,.2f}",
-      }),
-      use_container_width=True,
-  )
+  if len(resumen_devoluciones) > 0:
+    df_resumen = pd.DataFrame(resumen_devoluciones)
+    st.subheader("📋 Resumen Financiero de Devoluciones")
+    st.dataframe(
+        df_resumen.style.format({
+            "Precio Unitario": "${:,.2f}",
+            "Subtotal Devolución": "${:,.2f}",
+        }),
+        use_container_width=True,
+    )
+  else:
+    df_resumen = pd.DataFrame(columns=["Código", "Producto", "Cajas Dev.", "Botellas Dev.", "Precio Unitario", "Subtotal Devolución"])
+    st.info("Ingresa al menos un código y cantidad válida arriba para calcular el resumen.")
 
   neto_a_liquidar = total_libro_ruta - total_valor_devuelto
 
@@ -267,12 +274,9 @@ if pdf_subido is not None:
   st.markdown("---")
   st.subheader("🏪 Trazabilidad por Cliente y Tienda")
 
-  for _, row in df_resumen.iterrows():
-    codigo_dev = str(row["Código"])
-    cajas_dev = float(row["Cajas Dev."])
-    botellas_dev = float(row["Botellas Dev."])
-    
-    if (cajas_dev > 0 or botellas_dev > 0) and codigo_dev and codigo_dev != "nan":
+  if len(resumen_devoluciones) > 0:
+    for row in resumen_devoluciones:
+      codigo_dev = str(row["Código"])
       tiendas_afectadas = df_ruta_actual[df_ruta_actual["Código"].astype(str) == codigo_dev]
 
       with st.expander(
@@ -287,7 +291,9 @@ if pdf_subido is not None:
               use_container_width=True,
           )
         else:
-          st.info("No se encontró una coincidencia tabular exacta para este código en esta ruta del PDF.")
+          st.info("No se encontró una coincidencia tabular exacta para este código en esta ruta del PDF. (Se aplicó cálculo estándar).")
+  else:
+    st.info("Agrega devoluciones para ver la trazabilidad de los clientes afectados.")
 
   with st.expander("🔍 Ver datos brutos extraídos del PDF"):
     if not df_ruta_actual.empty:
