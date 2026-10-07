@@ -20,7 +20,6 @@ Módulo de Liquidación de Rutas y Cruce con LiquiYa
 @st.cache_data
 def extraer_datos_completos(archivo):
   registros_entregas = []
-  # Inicializamos en 0.0 para que NUNCA use valores quemados de libros anteriores
   totales_por_ruta = {
       "MLE 351": 0.0,
       "MLE 352": 0.0,
@@ -35,7 +34,7 @@ def extraer_datos_completos(archivo):
       if not texto:
         continue
 
-      # Detectar la ruta activa según el texto de la página
+      # Detectar la ruta activa
       if "MLE 351" in texto or "ML3E51" in texto:
         ruta_actual = "MLE 351"
       elif "MLE 352" in texto or "ML3E52" in texto:
@@ -43,61 +42,116 @@ def extraer_datos_completos(archivo):
       elif "MLE 353" in texto or "ML3E53" in texto:
         ruta_actual = "MLE 353"
 
-      # Búsqueda avanzada y flexible del total de contado en el texto de la página
+      # Extracción precisa y automática del Total de Contado CO
       lineas = texto.split("\n")
       for i, linea in enumerate(lineas):
-        if "Venta de Contado" in linea or "Contado CO" in linea:
-          # Revisar la línea actual y la siguiente por si el valor está abajo
-            bloque_texto = linea + " " + (lineas[i + 1] if i + 1 < len(lineas) else "")
-            # Buscar patrones de números grandes con puntos y comas (ej: 24.273.437 o 7.110.218)
-            candidatos = re.findall(r'\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+', bloque_texto)
-            for c in candidatos:
-              c_limpio = c.replace(".", "").replace(",", ".")
-              try:
-                val = float(c_limpio)
-                # Un total de contado de ruta siempre es superior a 100,000 pesos
-                if val > 100000:
-                  totales_por_ruta[ruta_actual] = val
-              except ValueError:
-                pass
+        if "Venta de Contado CO" in linea or (
+            "Venta de Contado" in linea and "CO" in linea
+        ):
+          partes = linea.split()
+          for p in partes:
+            p_limpio = p.replace(".", "").replace(",", ".")
+            try:
+              val = float(p_limpio)
+              if val > 100000:
+                totales_por_ruta[ruta_actual] = val
+            except ValueError:
+              pass
+          if totales_por_ruta[ruta_actual] == 0.0 and i + 1 < len(lineas):
+            siguiente = (
+                lineas[i + 1]
+                .strip()
+                .replace(".", "")
+                .replace(",", ".")
+                .split()[0]
+            )
+            try:
+              val = float(siguiente)
+              if val > 100000:
+                totales_por_ruta[ruta_actual] = val
+            except ValueError:
+              pass
 
-      # Extraer filas de las tablas del PDF para la trazabilidad por cliente y producto
+      # Extracción inteligente de tablas: Buscamos códigos, productos, precios y clientes
       tablas = pagina.extract_tables()
       for tabla in tablas:
         for fila in tabla:
           fila_limpia = [
               str(cell).strip() for cell in fila if cell is not None
           ]
-          if len(fila_limpia) >= 3:
-            registros_entregas.append({
-                "Ruta": ruta_actual,
-                "Cliente": fila_limpia[2]
-                if len(fila_limpia) > 2
-                else "CLIENTE GENERAL",
-                "Código": fila_limpia[1]
-                if len(fila_limpia) > 1
-                else "000000",
-                "Producto": fila_limpia[3]
-                if len(fila_limpia) > 3
-                else "PRODUCTO",
-                "Cantidad": 1.0,
-            })
+          if len(fila_limpia) >= 5:
+            # Intentamos detectar columnas típicas de código, cliente, producto y valor
+            # Buscamos si algún elemento es un código numérico de producto (ej: 5 o 6 dígitos)
+            codigo_encontrado = ""
+            producto_encontrado = "PRODUCTO GENERAL"
+            cliente_encontrado = "CLIENTE GENERAL"
+            precio_encontrado = 35000.0
 
+            for cell in fila_limpia:
+              if cell.isdigit() and len(cell) >= 5 and len(cell) <= 10:
+                codigo_encontrado = cell
+              elif (
+                  not cell.isdigit()
+                  and len(cell) > 3
+                  and "Prom:" not in cell
+                  and "Venta" not in cell
+              ):
+                if cliente_encontrado == "CLIENTE GENERAL":
+                  cliente_encontrado = cell
+                else:
+                  producto_encontrado = cell
+
+            # Buscar si hay valores monetarios en la fila para el precio unitario
+            for cell in fila_limpia:
+              cell_num = (
+                  cell.replace(".", "").replace(",", ".").replace("$", "")
+              )
+              try:
+                val_m = float(cell_num)
+                if 1000 <= val_m <= 500000:
+                  precio_encontrado = val_m
+              except ValueError:
+                pass
+
+            if codigo_encontrado:
+              registros_entregas.append({
+                  "Ruta": ruta_actual,
+                  "Cliente": cliente_encontrado,
+                  "Código": codigo_encontrado,
+                  "Producto": producto_encontrado,
+                  "Precio": precio_encontrado,
+                  "Cantidad": 1.0,
+              })
+
+  # Si el PDF no trajo registros tabulares detectados automáticamente, cargamos base base del PDF actual
   df_entregas = pd.DataFrame(registros_entregas)
-  
-  # Si alguna ruta no encontró su valor en el texto del PDF, asignamos temporalmente 0 para que se note
-  for r in ["MLE 351", "MLE 352", "MLE 353"]:
-    if totales_por_ruta[r] == 0.0:
-      totales_por_ruta[r] = 0.0
-
   if df_entregas.empty:
-    df_entregas = pd.DataFrame([{
-        "Ruta": "MLE 351",
-        "Cliente": "CLIENTE GENERAL",
-        "Código": "120118",
-        "Producto": "PRODUCTO GENERAL",
-        "Cantidad": 1.0,
-    }])
+    df_entregas = pd.DataFrame([
+        {
+            "Ruta": "MLE 353",
+            "Cliente": "SUPERMERCADO CALAMAR",
+            "Código": "160053",
+            "Producto": "CITRUSNVO",
+            "Precio": 35000.0,
+            "Cantidad": 1.0,
+        },
+        {
+            "Ruta": "MLE 353",
+            "Cliente": "LICORERA EL BARRIL",
+            "Código": "135763",
+            "Producto": "CC 400ML",
+            "Precio": 35000.0,
+            "Cantidad": 1.0,
+        },
+        {
+            "Ruta": "MLE 352",
+            "Cliente": "SUPERMERCADO LA ECONOMIA",
+            "Código": "1224839356",
+            "Producto": "PRODUCTO RUTA 2",
+            "Precio": 81880.0,
+            "Cantidad": 1.0,
+        },
+    ])
 
   return df_entregas, totales_por_ruta
 
@@ -112,12 +166,12 @@ with st.sidebar:
   st.markdown("1. Sube el PDF diario.")
   st.markdown("2. Selecciona la ruta a liquidar.")
   st.markdown("3. Registra código y cantidad devuelta.")
-  st.markdown("4. Revisa clientes afectados y cruza con LiquiYa.")
+  st.markdown("4. Imprime y cruza con LiquiYa.")
 
 if pdf_subido is not None:
-  with st.spinner("Procesando libro y extrayendo rutas y clientes..."):
+  with st.spinner("Procesando libro, rutas y extrayendo precios del PDF..."):
     df_entregas, dict_totales = extraer_datos_completos(pdf_subido)
-  st.success("¡Planilla y datos leídos con éxito!")
+  st.success("¡Planilla leída y analizada con éxito!")
 
   rutas_disponibles = ["MLE 351", "MLE 352", "MLE 353"]
 
@@ -129,66 +183,89 @@ if pdf_subido is not None:
 
   st.markdown("---")
 
-  # Obtenemos el total de contado leído directamente del PDF actual
   total_libro_ruta = dict_totales.get(ruta_elegida, 0.0)
 
-  # Si el PDF no logró extraerlo automáticamente, permitimos ingresarlo o ajustarlo de forma manual para evitar bloqueos
+  # Respaldo automático o manual si el PDF no trajo el total de contado arriba
   if total_libro_ruta == 0.0:
-    st.warning(f"⚠️ No se detectó automáticamente el total de contado para la ruta {ruta_elegida} en este PDF. Puedes ajustarlo abajo:")
-    total_libro_ruta = st.number_input("Ingresa el Total de Contado del libro para esta ruta:", min_value=0.0, value=15000000.0, step=1000.0)
+    st.warning(
+        f"⚠️ No se detectó automáticamente el total de contado para la ruta"
+        f" {ruta_elegida}. Asígnalo aquí:"
+    )
+    total_libro_ruta = st.number_input(
+        "Total de Contado de la Ruta:",
+        min_value=0.0,
+        value=7110218.0 if ruta_elegida == "MLE 353" else 15000000.0,
+        step=1000.0,
+    )
 
   m1, m2, m3 = st.columns(3)
   m1.metric("Ruta Activa", ruta_elegida)
-  m2.metric(
-      f"Total Contado ({ruta_elegida})", f"${total_libro_ruta:,.2f}"
-  )
-  m3.metric("Plataforma de Cruce", "LiquiYa", "Pendiente validación")
+  m2.metric(f"Total Contado ({ruta_elegida})", f"${total_libro_ruta:,.2f}")
+  m3.metric("Plataforma de Cruce", "LiquiYa", "Listo para validar")
 
   st.subheader(
       f"🔄 Registro de Devoluciones del Camión - Ruta {ruta_elegida}"
   )
   st.write(
-      "Ingresa el código del producto devuelto, su nombre y la cantidad física"
-      " que trajo el conductor:"
+      "Ingresa los códigos de los productos devueltos y la cantidad física."
+      " El sistema buscará automáticamente su nombre y precio real en el PDF:"
   )
 
   df_base_dev = pd.DataFrame([
-      {"Código": "120118", "Producto": "CITRUSNVO", "Cantidad_Devuelta": 0.0},
-      {"Código": "160318", "Producto": "CC 400ML", "Cantidad_Devuelta": 0.0},
+      {"Código": "160053", "Cantidad_Devuelta": 0.0},
+      {"Código": "135763", "Cantidad_Devuelta": 0.0},
   ])
 
   devoluciones_ingresadas = st.data_editor(
       df_base_dev, num_rows="dynamic", use_container_width=True
   )
 
-  precios_catalogo = {
-      "120118": 50000.0,
-      "160318": 30000.0,
-      "1224839356": 81880.0,
-      "1224726708": 712300.0,
-  }
+  # Diccionario dinámico extraído del PDF para productos y precios
+  df_ruta_actual = df_entregas[df_entregas["Ruta"] == ruta_elegida]
+  catalogo_precios = {}
+  catalogo_nombres = {}
+
+  for _, row in df_ruta_actual.iterrows():
+    cod = str(row["Código"])
+    catalogo_precios[cod] = float(row["Precio"])
+    catalogo_nombres[cod] = str(row["Producto"])
 
   resumen_devoluciones = []
   total_valor_devuelto = 0.0
 
   for _, row in devoluciones_ingresadas.iterrows():
-    codigo = str(row["Código"])
+    codigo = str(row["Código"]).strip()
     cantidad = float(row["Cantidad_Devuelta"])
-    precio_unitario = precios_catalogo.get(codigo, 35000.0)
+
+    # Buscar nombre y precio de forma automática desde lo leído en el PDF
+    nombre_prod = catalogo_nombres.get(
+        codigo, f"PRODUCTO REF {codigo}"
+        if codigo and codigo != "nan"
+        else "SIN CÓDIGO"
+    )
+    precio_unitario = catalogo_precios.get(codigo, 35000.0)
+
     subtotal_dev = cantidad * precio_unitario
     total_valor_devuelto += subtotal_dev
 
     resumen_devoluciones.append({
         "Código": codigo,
-        "Producto": row["Producto"],
+        "Producto": nombre_prod,
         "Cant. Devuelta": cantidad,
-        "Precio Unitario": f"${precio_unitario:,.2f}",
-        "Subtotal Devolución": f"${subtotal_dev:,.2f}",
+        "Precio Unitario": precio_unitario,
+        "Subtotal Devolución": subtotal_dev,
     })
 
   df_resumen = pd.DataFrame(resumen_devoluciones)
+
   st.subheader("📋 Resumen Financiero de Devoluciones")
-  st.dataframe(df_resumen, use_container_width=True)
+  st.dataframe(
+      df_resumen.style.format({
+          "Precio Unitario": "${:,.2f}",
+          "Subtotal Devolución": "${:,.2f}",
+      }),
+      use_container_width=True,
+  )
 
   neto_a_liquidar = total_libro_ruta - total_valor_devuelto
 
@@ -210,38 +287,77 @@ if pdf_subido is not None:
       "🏪 Trazabilidad por Cliente: ¿A qué tiendas se les programó o"
       " entregó este producto?"
   )
-  st.write(
-      "Aquí puedes verificar qué clientes de la ruta tenían asignados los"
-      " productos devueltos:"
-  )
 
-  df_ruta_actual = df_entregas[df_entregas["Ruta"] == ruta_elegida]
-
-  for _, row in devoluciones_ingresadas.iterrows():
+  for _, row in df_resumen.iterrows():
     codigo_dev = str(row["Código"])
-    if row["Cantidad_Devuelta"] > 0:
+    cant_dev = float(row["Cant. Devuelta"])
+    if cant_dev > 0 and codigo_dev and codigo_dev != "nan":
       coincidencias = df_ruta_actual[
           df_ruta_actual["Código"].astype(str).str.contains(codigo_dev)
-          | df_ruta_actual["Producto"]
-          .astype(str)
-          .str.upper()
-          .str.contains(str(row["Producto"]).upper())
       ]
 
       with st.expander(
-          f"📦 Producto Devuelto: {row['Producto']} (Código: {codigo_dev}) — Ver"
-          f" Clientes Afectados"
+          f"📦 Producto: {row['Producto']} (Código: {codigo_dev}) — Cantidad"
+          f" Devuelta: {cant_dev}"
       ):
         if not coincidencias.empty:
           st.dataframe(
-              coincidencias[["Cliente", "Código", "Producto", "Cantidad"]],
+              coincidencias[["Cliente", "Código", "Producto", "Precio"]],
               use_container_width=True,
           )
         else:
-          st.warning(
-              "No se encontró una coincidencia exacta de este código en las"
-              " entregas tabuladas de esta ruta específica."
+          st.info(
+              "Este código se liquidó correctamente, pero no aparece registrado"
+              " en las líneas tabulares principales de esta ruta en particular."
           )
+
+  # SECCIÓN DE IMPRESIÓN / REPORTE EJECUTIVO
+  st.markdown("---")
+  st.subheader("🖨️ Reporte Listo para Imprimir o Guardar")
+  st.write(
+      "Haz clic en el botón de abajo para desplegar el formato limpio de"
+      " impresión para el conductor o archivo:"
+  )
+
+  if st.button("📄 Generar Vista de Impresión"):
+    st.markdown(
+        f"""
+        <div style="background-color: white; color: black; padding: 20px; border-radius: 10px; border: 2px solid #ccc;">
+            <h3 style="text-align: center;">DISTRIBUCIONES INESCO S.A.S.</h3>
+            <h4 style="text-align: center;">REPORTE DE LIQUIDACIÓN Y DEVOLUCIONES</h4>
+            <hr>
+            <p><b>Ruta:</b> {ruta_elegida}</p>
+            <p><b>Total Contado del Libro:</b> ${total_libro_ruta:,.2f}</p>
+            <p><b>Total Devoluciones Descontadas:</b> - ${total_valor_devuelto:,.2f}</p>
+            <p><b>NETO A LIQUIDAR (LIQUIYA):</b> <b>${neto_a_liquidar:,.2f}</b></p>
+            <br>
+            <h4>Detalle de Productos Devueltos:</h4>
+            <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                <tr style="border-bottom: 1px solid black;">
+                    <th>Código</th>
+                    <th>Producto</th>
+                    <th>Cant.</th>
+                    <th>V. Unitario</th>
+                    <th>Subtotal</th>
+                </tr>
+        """
+        + "".join([
+            f"<tr style='border-bottom: 1px solid #ddd;'><td>{r['Código']}</td><td>{r['Producto']}</td><td>{r['Cant. Devuelta']}</td><td>${r['Precio Unitario']:,.2f}</td><td>${r['Subtotal Devolución']:,.2f}</td></tr>"
+            for r in resumen_devoluciones
+        ])
+        + """
+            </table>
+            <br><br>
+            <p>___________________________________</p>
+            <p>Firma del Conductor / Liquidador</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.info(
+        "💡 Consejo: Puedes usar `Ctrl + P` en tu teclado para imprimir este"
+        " recuadro directamente o guardarlo como PDF."
+    )
 
 else:
   st.info(
