@@ -82,7 +82,7 @@ def extraer_datos_completos(archivo):
             importe_total = 0.0
 
             for cell in fila_limpia:
-              # Código de producto (4 a 10 dígitos) - eliminamos ceros a la izquierda para estandarizar
+              # Código de producto (4 a 10 dígitos) - estandarizado sin ceros a la izquierda innecesarios
               if cell.isdigit() and 4 <= len(cell) <= 10:
                 codigo_encontrado = str(int(cell))
               elif not cell.isdigit() and len(cell) > 2 and "Venta" not in cell and "Ruta" not in cell and "SUB" not in cell:
@@ -103,7 +103,7 @@ def extraer_datos_completos(archivo):
               cell_num_clean = cell.replace(".", "").replace(",", ".").replace("$", "")
               try:
                 num = float(cell_num_clean)
-                if 1000 <= num <= 200000 and precio_unitario_tabla == 0.0:
+                if 1000 <= num <= 500000 and precio_unitario_tabla == 0.0:
                   precio_unitario_tabla = num
                 if 1000 <= num <= 5000000:
                   importe_total = num
@@ -204,7 +204,6 @@ if pdf_subido is not None:
     if codigo_raw is None or str(codigo_raw).strip() == "" or str(codigo_raw).lower() == "none":
       continue
     
-    # Normalizar el código digitado quitando espacios y convirtiendo a entero sin ceros a la izquierda
     try:
       codigo = str(int(str(codigo_raw).strip()))
     except ValueError:
@@ -235,14 +234,13 @@ if pdf_subido is not None:
       if precio_tabla > 0:
         precio_unitario = precio_tabla
       elif importe_tabla > 0:
-        # Calcular unitario basado en las unidades originales de la fila
-        total_ unidades_orig = (cajas_originales * 15.0) + botellas_originales
+        total_unidades_orig = (cajas_originales * 15.0) + botellas_originales
         if total_unidades_orig > 0:
           precio_unitario = importe_tabla / total_unidades_orig
         else:
           precio_unitario = importe_tabla / 15.0
 
-    # Calcular subtotal de devolución
+    # Calcular subtotal de devolución de forma proporcional
     subtotal_dev = (cajas_dev * precio_unitario) + (botellas_dev * (precio_unitario / 15.0 if precio_unitario > 0 else 0.0))
     total_valor_devuelto += subtotal_dev
 
