@@ -58,109 +58,74 @@ def extraer_datos_completos(archivo):
             except ValueError:
               pass
 
-      # Barrido línea por línea para capturar clientes y productos con sus precios
+      # Barrido para capturar el nombre del cliente actual en el bloque
       for i, linea in enumerate(lineas):
-        # Detectar cliente aproximado basado en encabezados de bloque
         if "Fecha de Entrega:" in linea or "Ruta:" in linea:
           if i >= 2:
             posible_cliente = lineas[i - 2].strip()
             if len(posible_cliente) > 2 and not posible_cliente.isdigit() and "ML3" not in posible_cliente and "CR" not in posible_cliente:
               cliente_actual = posible_cliente
 
-        # Buscar patrones de productos que contengan códigos (ej: 4 a 6 dígitos) y precios o valores monetarios
-        # Buscamos si la línea tiene números que parezcan códigos de producto
-        tokens = linea.split()
-        for token in tokens:
-          if token.isdigit() and 4 <= len(token) <= 8:
-            codigo_encontrado = str(int(token))
-            
-            # Buscar precios o importes en la misma línea o en líneas cercanas
-            precio_encontrado = 0.0
-            importe_encontrado = 0.0
-            cajas_f = 0.0
-            botellas_f = 0.0
-
-            # Analizar esta línea y la siguiente para extraer cantidades y precios
-            lineas_a_revisar = [linea]
-            if i + 1 < len(lineas):
-              lineas_a_revisar.append(lineas[i + 1])
-
-            for l_rev in lineas_a_revisar:
-              # Buscar montos con formato de dinero o decimales grandes
-              match_precios = re.findall(r"\b\d{1,3}(?:\.\d{3})*(?:,\d+)?\b|\b\d+(?:\.\d+)?\b", l_rev)
-              for mp in match_precios:
-                mp_clean = mp.replace(".", "").replace(",", ".")
-                try:
-                  val_num = float(mp_clean)
-                  # Filtrar precios unitarios lógicos o importes
-                  if 500 <= val_num <= 500000 and precio_encontrado == 0.0:
-                    precio_encontrado = val_num
-                  elif val_num > 500000:
-                    importe_encontrado = val_num
-                except ValueError:
-                  pass
-
-              # Buscar formato de cajas/botellas si existe (ej. 0/15 o similar)
-              if "/" in l_rev:
-                partes_slash = l_rev.split("/")
-                try:
-                  if len(partes_slash) >= 2:
-                    cajas_f = float(partes_slash[0].strip().split()[-1])
-                    botellas_f = float(partes_slash[1].strip().split()[0])
-                except Exception:
-                  pass
-
-            # Guardar el registro consolidado
-            registros_entregas.append({
-                "Ruta": ruta_actual,
-                "Cliente": cliente_actual,
-                "Código": codigo_encontrado,
-                "Producto": f"PRODUCTO REF {codigo_encontrado}",
-                "Cajas_Fila": cajas_f,
-                "Botellas_Fila": botellas_f,
-                "Precio_Tabla": precio_encontrado,
-                "Importe_Total": importe_encontrado
-            })
-
-      # Extracción estándar de respaldo con tablas de pdfplumber
+      # Extracción estructurada mediante tablas de pdfplumber
       tablas = pagina.extract_tables()
       for tabla in tablas:
         for fila in tabla:
           fila_limpia = [
               str(cell).strip() for cell in fila if cell is not None and str(cell).strip() != ""
           ]
-          if len(fila_limpia) >= 2:
+          if len(fila_limpia) >= 3:
             codigo_encontrado = ""
-            precio_tabla = 0.0
+            producto_encontrado = ""
+            cajas_orig = 0.0
+            botellas_orig = 0.0
+            precio_unitario = 0.0
+            importe_total = 0.0
+
             for cell in fila_limpia:
+              # Detectar código (número de 4 a 8 dígitos)
               if cell.isdigit() and 4 <= len(cell) <= 8:
                 codigo_encontrado = str(int(cell))
-              cell_clean = cell.replace(".", "").replace(",", ".").replace("$", "")
+              elif not cell.isdigit() and len(cell) > 2 and "Venta" not in cell and "Ruta" not in cell and "SUB" not in cell and "Total" not in cell:
+                if producto_encontrado == "":
+                  producto_encontrado = cell
+
+              # Detectar formato cajas y botellas (ej. "0 / 15", "1 / 30", etc.)
+              if "/" in cell:
+                partes_cb = cell.split("/")
+                try:
+                  if len(partes_cb) == 2:
+                    cajas_orig = float(partes_orig_val := partes_cb[0].strip().split()[-1])
+                    botellas_orig = float(partes_cb[1].strip().split()[0])
+                except Exception:
+                  pass
+
+              # Limpiar y capturar valores monetarios (precios o importes)
+              cell_num_clean = cell.replace(".", "").replace(",", ".").replace("$", "")
               try:
-                val = float(cell_clean)
-                if 500 <= val <= 500000:
-                  precio_tabla = val
+                num_val = float(cell_num_clean)
+                if 500 <= num_val <= 300000 and precio_unitario == 0.0:
+                  precio_unitario = num_val
+                elif num_val > 300000:
+                  importe_total = num_val
               except ValueError:
                 pass
-            
+
             if codigo_encontrado:
               registros_entregas.append({
                   "Ruta": ruta_actual,
                   "Cliente": cliente_actual,
                   "Código": codigo_encontrado,
-                  "Producto": f"PRODUCTO REF {codigo_encontrado}",
-                  "Cajas_Fila": 0.0,
-                  "Botellas_Fila": 0.0,
-                  "Precio_Tabla": precio_tabla,
-                  "Importe_Total": 0.0
+                  "Producto": producto_encontrado if producto_encontrado else f"PRODUCTO REF {codigo_encontrado}",
+                  "Cajas_Originales": cajas_orig,
+                  "Botellas_Originales": botellas_orig,
+                  "Precio_Unitario": precio_unitario,
+                  "Importe_Total": importe_total
               })
 
   if len(registros_entregas) > 0:
     df_entregas = pd.DataFrame(registros_entregas)
-    # Eliminar duplicados exactos de códigos por ruta/cliente
-    df_entregas = df_entregas.drop_duplicates(subset=["Ruta", "Código"])
   else:
-    df_entregas = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas_Fila", "Botellas_Fila", "Precio_Tabla", "Importe_Total"])
+    df_entregas = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas_Originales", "Botellas_Originales", "Precio_Unitario", "Importe_Total"])
 
   return df_entregas, totales_por_ruta
 
@@ -214,7 +179,7 @@ if pdf_subido is not None:
   if not df_entregas.empty and "Ruta" in df_entregas.columns:
     df_ruta_actual = df_entregas[df_entregas["Ruta"] == ruta_elegida]
   else:
-    df_ruta_actual = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas_Fila", "Botellas_Fila", "Precio_Tabla", "Importe_Total"])
+    df_ruta_actual = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas_Originales", "Botellas_Originales", "Precio_Unitario", "Importe_Total"])
 
   st.subheader(
       f"🔄 Registro de Devoluciones del Camión - Ruta {ruta_elegida}"
@@ -253,34 +218,44 @@ if pdf_subido is not None:
     if cajas_dev == 0.0 and botellas_dev == 0.0:
       continue
 
-    # Buscar el producto de forma flexible en la ruta actual
+    # Buscar el producto en la ruta actual
     coincidencias = df_ruta_actual[df_ruta_actual["Código"].astype(str) == codigo]
 
     nombre_prod = f"PRODUCTO REF {codigo}"
-    precio_unitario = 0.0
+    precio_unitario_calculado = 0.0
+    factor_division = 30.0  # Factor estándar por defecto (ej. 30 botellas por caja)
 
     if not coincidencias.empty:
-      nombre_prod = coincidencias.iloc[0]["Producto"]
-      precio_tabla = coincidencias.iloc[0]["Precio_Tabla"]
-      importe_tabla = coincidencias.iloc[0]["Importe_Total"]
-      cajas_originales = coincidencias.iloc[0]["Cajas_Fila"]
-      botellas_originales = coincidencias.iloc[0]["Botellas_Fila"]
+      # Tomamos el primer registro encontrado o sumamos valores si hay varios clientes
+      match_row = coincidencias.iloc[0]
+      nombre_prod = match_row["Producto"]
+      importe_t = match_row["Importe_Total"]
+      precio_u = match_row["Precio_Unitario"]
+      c_orig = match_row["Cajas_Originales"]
+      b_orig = match_row["Botellas_Originales"]
 
-      if precio_tabla > 0:
-        precio_unitario = precio_tabla
-      elif importe_tabla > 0:
-        total_unidades_orig = (cajas_originales * 15.0) + botellas_originales
-        if total_unidades_orig > 0:
-          precio_unitario = importe_tabla / total_unidades_orig
+      # Determinar factor de unidades totales originales en esa venta
+      # Si se especifica cajas y botellas originales, calculamos total de unidades (ej: Cajas * 30 + Botellas)
+      unidades_totales_orig = (c_orig * factor_division) + b_orig
+
+      if importe_t > 0 and unidades_totales_orig > 0:
+        # El precio unitario por botella sale de dividir el importe total entre las unidades totales vendidas
+        precio_unitario_calculado = importe_t / unidades_totales_orig
+      elif importe_t > 0 and c_orig > 0:
+        precio_unitario_calculado = importe_t / (c_orig * factor_division)
+      elif precio_u > 0:
+        # Si el precio unitario corresponde a caja, lo dividimos por el factor (30)
+        if precio_u > 5000:
+          precio_unitario_calculado = precio_u / factor_division
         else:
-          precio_unitario = importe_tabla / 15.0
+          precio_unitario_calculado = precio_u
+    
+    if precio_unitario_calculado == 0.0:
+      # Valor estimado de respaldo si el PDF no trajo el importe explícito para esa línea exacta
+      precio_unitario_calculado = 900.0  # Ajustable según producto
 
-    # Si por alguna razón el precio sigue en 0, permitir asignación manual o estimación segura
-    if precio_unitario == 0.0:
-      precio_unitario = 1000.0  # Valor base por defecto para evitar ceros en devoluciones si el PDF no trae el precio explícito
-
-    # Calcular subtotal de devolución
-    subtotal_dev = (cajas_dev * precio_unitario) + (botellas_dev * (precio_unitario / 15.0))
+    # Subtotal devolución = (Cajas devueltas * factor * precio_botella) + (Botellas devueltas * precio_botella)
+    subtotal_dev = (cajas_dev * factor_division * precio_unitario_calculado) + (botellas_dev * precio_unitario_calculado)
     total_valor_devuelto += subtotal_dev
 
     resumen_devoluciones.append({
@@ -288,7 +263,7 @@ if pdf_subido is not None:
         "Producto": nombre_prod,
         "Cajas Dev.": cajas_dev,
         "Botellas Dev.": botellas_dev,
-        "Precio Unitario": precio_unitario,
+        "Precio Botella": precio_unitario_calculado,
         "Subtotal Devolución": subtotal_dev,
     })
 
@@ -297,13 +272,13 @@ if pdf_subido is not None:
     st.subheader("📋 Resumen Financiero de Devoluciones")
     st.dataframe(
         df_resumen.style.format({
-            "Precio Unitario": "${:,.2f}",
+            "Precio Botella": "${:,.2f}",
             "Subtotal Devolución": "${:,.2f}",
         }),
         use_container_width=True,
     )
   else:
-    df_resumen = pd.DataFrame(columns=["Código", "Producto", "Cajas Dev.", "Botellas Dev.", "Precio Unitario", "Subtotal Devolución"])
+    df_resumen = pd.DataFrame(columns=["Código", "Producto", "Cajas Dev.", "Botellas Dev.", "Precio Botella", "Subtotal Devolución"])
     st.info("Digita un código y sus cantidades arriba para ver el cálculo automático.")
 
   neto_a_liquidar = total_libro_ruta - total_valor_devuelto
@@ -334,14 +309,14 @@ if pdf_subido is not None:
       ):
         if not tiendas_afectadas.empty:
           st.dataframe(
-              tiendas_afectadas[["Cliente", "Código", "Producto", "Cajas_Fila", "Botellas_Fila", "Precio_Tabla", "Importe_Total"]].style.format({
-                  "Precio_Tabla": "${:,.2f}",
+              tiendas_afectadas[["Cliente", "Código", "Producto", "Cajas_Originales", "Botellas_Originales", "Precio_Unitario", "Importe_Total"]].style.format({
+                  "Precio_Unitario": "${:,.2f}",
                   "Importe_Total": "${:,.2f}"
               }),
               use_container_width=True,
           )
         else:
-          st.info(f"ℹ️ El código {codigo_dev} está registrado en la devolución. Mostrando contexto general de la ruta:")
+          st.info(f"ℹ️ Mostrando registros generales de la ruta para el código {codigo_dev}:")
           st.dataframe(df_ruta_actual[["Cliente", "Código", "Producto"]].head(5), use_container_width=True)
   else:
     st.info("Agrega devoluciones para ver la trazabilidad de los clientes.")
@@ -373,12 +348,12 @@ if pdf_subido is not None:
                     <th>Producto</th>
                     <th>Cajas</th>
                     <th>Botellas</th>
-                    <th>V. Unitario</th>
+                    <th>V. Botella</th>
                     <th>Subtotal</th>
                 </tr>
         """
         + "".join([
-            f"<tr style='border-bottom: 1px solid #ddd;'><td>{r['Código']}</td><td>{r['Producto']}</td><td>{r['Cajas Dev.']}</td><td>{r['Botellas Dev.']}</td><td>${r['Precio Unitario']:,.2f}</td><td>${r['Subtotal Devolución']:,.2f}</td></tr>"
+            f"<tr style='border-bottom: 1px solid #ddd;'><td>{r['Código']}</td><td>{r['Producto']}</td><td>{r['Cajas Dev.']}</td><td>{r['Botellas Dev.']}</td><td>${r['Precio Botella']:,.2f}</td><td>${r['Subtotal Devolución']:,.2f}</td></tr>"
             for r in resumen_devoluciones
         ])
         + """
