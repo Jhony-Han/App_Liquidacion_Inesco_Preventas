@@ -1,3 +1,4 @@
+import re
 import pandas as pd
 import pdfplumber
 import streamlit as st
@@ -19,6 +20,7 @@ Módulo de Liquidación de Rutas y Cruce con LiquiYa
 @st.cache_data
 def extraer_datos_completos(archivo):
   registros_entregas = []
+  # Inicializamos en 0.0 para que NUNCA use valores quemados de libros anteriores
   totales_por_ruta = {
       "MLE 351": 0.0,
       "MLE 352": 0.0,
@@ -41,28 +43,25 @@ def extraer_datos_completos(archivo):
       elif "MLE 353" in texto or "ML3E53" in texto:
         ruta_actual = "MLE 353"
 
-      # Extraer con precisión el valor exacto de "Venta de Contado CO" del PDF
+      # Búsqueda avanzada y flexible del total de contado en el texto de la página
       lineas = texto.split("\n")
       for i, linea in enumerate(lineas):
-        if "Venta de Contado CO" in linea:
-          partes = linea.split("Venta de Contado CO")
-          # Intentamos tomar la parte numérica de la misma línea o de la siguiente
-          s.candidato = partes[-1].strip() if len(partes) > 1 else ""
-          if not candidato and i + 1 < len(lineas):
-            candidato = lineas[i + 1].strip()
+        if "Venta de Contado" in linea or "Contado CO" in linea:
+          # Revisar la línea actual y la siguiente por si el valor está abajo
+            bloque_texto = linea + " " + (lineas[i + 1] if i + 1 < len(lineas) else "")
+            # Buscar patrones de números grandes con puntos y comas (ej: 24.273.437 o 7.110.218)
+            candidatos = re.findall(r'\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+', bloque_texto)
+            for c in candidatos:
+              c_limpio = c.replace(".", "").replace(",", ".")
+              try:
+                val = float(c_limpio)
+                # Un total de contado de ruta siempre es superior a 100,000 pesos
+                if val > 100000:
+                  totales_por_ruta[ruta_actual] = val
+              except ValueError:
+                pass
 
-          # Limpiar formato de moneda (ej: 24.273.437 -> 24273437.0)
-          candidato_limpio = (
-              candidato.replace(".", "").replace(",", ".").split()[0]
-          )
-          try:
-            val = float(candidato_limpio)
-            if val > 0:
-              totales_por_ruta[ruta_actual] = val
-          except ValueError:
-            pass
-
-      # Extraer filas de las tablas del PDF para la trazabilidad por cliente
+      # Extraer filas de las tablas del PDF para la trazabilidad por cliente y producto
       tablas = pagina.extract_tables()
       for tabla in tablas:
         for fila in tabla:
@@ -84,39 +83,21 @@ def extraer_datos_completos(archivo):
                 "Cantidad": 1.0,
             })
 
-  # Respaldos de seguridad por si alguna ruta no leyó su total en el texto
-  if totales_por_ruta["MLE 351"] == 0:
-    totales_por_ruta["MLE 351"] = 15547099.0
-  if totales_por_ruta["MLE 352"] == 0:
-    totales_por_ruta["MLE 352"] = 24273437.0  # Tomado de tu reporte real
-  if totales_por_ruta["MLE 353"] == 0:
-    totales_por_ruta["MLE 353"] = 7110218.0  # Tomado de tu reporte real
-
   df_entregas = pd.DataFrame(registros_entregas)
+  
+  # Si alguna ruta no encontró su valor en el texto del PDF, asignamos temporalmente 0 para que se note
+  for r in ["MLE 351", "MLE 352", "MLE 353"]:
+    if totales_por_ruta[r] == 0.0:
+      totales_por_ruta[r] = 0.0
+
   if df_entregas.empty:
-    df_entregas = pd.DataFrame([
-        {
-            "Ruta": "MLE 351",
-            "Cliente": "TIENDA ABI",
-            "Código": "120118",
-            "Producto": "CITRUSNVO",
-            "Cantidad": 2.0,
-        },
-        {
-            "Ruta": "MLE 352",
-            "Cliente": "SUPERMERCADO LA ECONOMIA",
-            "Código": "1224839356",
-            "Producto": "PRODUCTO RUTA 2",
-            "Cantidad": 1.0,
-        },
-        {
-            "Ruta": "MLE 353",
-            "Cliente": "SUPERMERCADO CALAMAR",
-            "Código": "1224725805",
-            "Producto": "PRODUCTO RUTA 3",
-            "Cantidad": 2.0,
-        },
-    ])
+    df_entregas = pd.DataFrame([{
+        "Ruta": "MLE 351",
+        "Cliente": "CLIENTE GENERAL",
+        "Código": "120118",
+        "Producto": "PRODUCTO GENERAL",
+        "Cantidad": 1.0,
+    }])
 
   return df_entregas, totales_por_ruta
 
@@ -148,7 +129,13 @@ if pdf_subido is not None:
 
   st.markdown("---")
 
-  total_libro_ruta = dict_totales.get(ruta_elegida, 15000000.0)
+  # Obtenemos el total de contado leído directamente del PDF actual
+  total_libro_ruta = dict_totales.get(ruta_elegida, 0.0)
+
+  # Si el PDF no logró extraerlo automáticamente, permitimos ingresarlo o ajustarlo de forma manual para evitar bloqueos
+  if total_libro_ruta == 0.0:
+    st.warning(f"⚠️ No se detectó automáticamente el total de contado para la ruta {ruta_elegida} en este PDF. Puedes ajustarlo abajo:")
+    total_libro_ruta = st.number_input("Ingresa el Total de Contado del libro para esta ruta:", min_value=0.0, value=15000000.0, step=1000.0)
 
   m1, m2, m3 = st.columns(3)
   m1.metric("Ruta Activa", ruta_elegida)
@@ -177,8 +164,8 @@ if pdf_subido is not None:
   precios_catalogo = {
       "120118": 50000.0,
       "160318": 30000.0,
-      "1224725805": 31325.0,
-      "1224443968": 82477.0,
+      "1224839356": 81880.0,
+      "1224726708": 712300.0,
   }
 
   resumen_devoluciones = []
