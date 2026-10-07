@@ -82,14 +82,14 @@ def extraer_datos_completos(archivo):
             importe_total = 0.0
 
             for cell in fila_limpia:
-              # Código de producto (4 a 10 dígitos)
+              # Código de producto (4 a 10 dígitos) - eliminamos ceros a la izquierda para estandarizar
               if cell.isdigit() and 4 <= len(cell) <= 10:
-                codigo_encontrado = cell
+                codigo_encontrado = str(int(cell))
               elif not cell.isdigit() and len(cell) > 2 and "Venta" not in cell and "Ruta" not in cell and "SUB" not in cell:
                 if producto_encontrado == "":
                   producto_encontrado = cell
 
-              # Detectar formato cajas / botellas (ej. "1", "2" o "0 / 15")
+              # Detectar formato cajas / botellas (ej. "0 / 15", "1", "2")
               if "/" in cell:
                 partes_cb = cell.split("/")
                 try:
@@ -98,25 +98,13 @@ def extraer_datos_completos(archivo):
                     botellas_fila = float(partes_cb[1].strip())
                 except ValueError:
                   pass
-              else:
-                # Si es un número entero solo en la columna de cajas/botellas
-                cell_clean = cell.replace(".", "").replace(",", ".")
-                try:
-                  val_num = float(cell_clean)
-                  if 0 < val_num <= 50 and cajas_fila == 0 and botellas_fila == 0:
-                    # Puede ser caja entera si no tiene barra
-                    pass
-                except ValueError:
-                  pass
 
               # Limpiar y detectar precios e importes monetarios
               cell_num_clean = cell.replace(".", "").replace(",", ".").replace("$", "")
               try:
                 num = float(cell_num_clean)
-                # Precios unitarios estándar en el rango de 1,000 a 200,000
                 if 1000 <= num <= 200000 and precio_unitario_tabla == 0.0:
                   precio_unitario_tabla = num
-                # Importes totales mayores
                 if 1000 <= num <= 5000000:
                   importe_total = num
               except ValueError:
@@ -197,7 +185,7 @@ if pdf_subido is not None:
       f"🔄 Registro de Devoluciones del Camión - Ruta {ruta_elegida}"
   )
   st.write(
-      "Digita el **Código** del producto devuelto y separa las cantidades en **Cajas Devueltas** y **Botellas Devueltas**. El sistema buscará el precio exacto en el libro:"
+      "Digita el **Código** del producto devuelto y separa las cantidades en **Cajas Devueltas** y **Botellas Devueltas**:"
   )
 
   df_base_dev = pd.DataFrame([
@@ -216,8 +204,12 @@ if pdf_subido is not None:
     if codigo_raw is None or str(codigo_raw).strip() == "" or str(codigo_raw).lower() == "none":
       continue
     
-    codigo = str(codigo_raw).strip()
-    
+    # Normalizar el código digitado quitando espacios y convirtiendo a entero sin ceros a la izquierda
+    try:
+      codigo = str(int(str(codigo_raw).strip()))
+    except ValueError:
+      codigo = str(codigo_raw).strip()
+
     val_cajas = row["Cajas_Devueltas"]
     cajas_dev = float(val_cajas) if (val_cajas is not None and str(val_cajas).lower() != "none") else 0.0
 
@@ -227,7 +219,7 @@ if pdf_subido is not None:
     if cajas_dev == 0.0 and botellas_dev == 0.0:
       continue
 
-    # Buscar el producto estrictamente en el DataFrame extraído del PDF de la ruta
+    # Buscar el producto de forma flexible en la ruta actual
     coincidencias = df_ruta_actual[df_ruta_actual["Código"].astype(str) == codigo]
 
     nombre_prod = f"PRODUCTO REF {codigo}"
@@ -237,16 +229,20 @@ if pdf_subido is not None:
       nombre_prod = coincidencias.iloc[0]["Producto"]
       precio_tabla = coincidencias.iloc[0]["Precio_Tabla"]
       importe_tabla = coincidencias.iloc[0]["Importe_Total"]
-      
-      # Si hay precio unitario registrado en la tabla, úsalo; si no, calcúlalo del importe
+      cajas_originales = coincidencias.iloc[0]["Cajas_Fila"]
+      botellas_originales = coincidencias.iloc[0]["Botellas_Fila"]
+
       if precio_tabla > 0:
         precio_unitario = precio_tabla
       elif importe_tabla > 0:
-        precio_unitario = importe_tabla
-    else:
-      precio_unitario = 0.0  # Si no está en el PDF, quedará en 0 para que lo verifiques
+        # Calcular unitario basado en las unidades originales de la fila
+        total_ unidades_orig = (cajas_originales * 15.0) + botellas_originales
+        if total_unidades_orig > 0:
+          precio_unitario = importe_tabla / total_unidades_orig
+        else:
+          precio_unitario = importe_tabla / 15.0
 
-    # Subtotal de la devolución basado en el precio real hallado en el libro
+    # Calcular subtotal de devolución
     subtotal_dev = (cajas_dev * precio_unitario) + (botellas_dev * (precio_unitario / 15.0 if precio_unitario > 0 else 0.0))
     total_valor_devuelto += subtotal_dev
 
