@@ -1,12 +1,14 @@
-import re
 import io
+import re
+from datetime import datetime
+
 import pandas as pd
 import pdfplumber
 import streamlit as st
 
 
 # ============================================================
-# CONFIGURACIÓN DE STREAMLIT
+# CONFIGURACIÓN
 # ============================================================
 
 st.set_page_config(
@@ -17,35 +19,133 @@ st.set_page_config(
 
 
 # ============================================================
-# ENCABEZADO
+# ESTILOS
 # ============================================================
 
 st.markdown(
     """
-    <div style="text-align:center;">
-        <h1>🚚 DISTRIBUCIONES INESCO S.A.S.</h1>
-        <h3>Módulo de Liquidación de Rutas y Cruce con LiquiYa</h3>
-    </div>
+    <style>
+
+    .titulo-principal {
+        text-align: center;
+        margin-bottom: 0;
+    }
+
+    .subtitulo {
+        text-align: center;
+        color: #888;
+        margin-top: 0;
+    }
+
+    .tarjeta {
+        padding: 18px;
+        border-radius: 12px;
+        border: 1px solid #333;
+        margin-bottom: 15px;
+    }
+
+    .total-grande {
+        font-size: 28px;
+        font-weight: bold;
+    }
+
+    .reporte-impresion {
+        background: white;
+        color: black;
+        padding: 35px;
+        border: 1px solid #aaa;
+        border-radius: 8px;
+        max-width: 1100px;
+        margin: auto;
+    }
+
+    .reporte-impresion table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+    }
+
+    .reporte-impresion th {
+        background: #eeeeee;
+        color: black;
+        border: 1px solid #999;
+        padding: 8px;
+        text-align: left;
+    }
+
+    .reporte-impresion td {
+        border: 1px solid #bbb;
+        padding: 8px;
+    }
+
+    .reporte-impresion .derecha {
+        text-align: right;
+    }
+
+    .reporte-impresion .centro {
+        text-align: center;
+    }
+
+    .reporte-impresion .total-final {
+        font-size: 22px;
+        font-weight: bold;
+        text-align: right;
+    }
+
+    @media print {
+
+        header,
+        footer,
+        [data-testid="stSidebar"],
+        [data-testid="stToolbar"] {
+            display: none !important;
+        }
+
+        .reporte-impresion {
+            border: none !important;
+            box-shadow: none !important;
+            max-width: 100% !important;
+        }
+
+    }
+
+    </style>
     """,
     unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# FUNCIONES AUXILIARES
+# ENCABEZADO
+# ============================================================
+
+st.markdown(
+    """
+    <h1 class="titulo-principal">
+        🚚 DISTRIBUCIONES INESCO S.A.S.
+    </h1>
+
+    <h3 class="subtitulo">
+        Módulo de Liquidación de Rutas y Cruce con LiquiYa
+    </h3>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# FUNCIONES GENERALES
 # ============================================================
 
 def limpiar_numero_monetario(valor):
     """
-    Convierte valores del PDF:
+    Convierte valores del PDF.
 
-        32.500
-        1.250.000
-        $32.500
+    Ejemplos:
 
-    a números.
-
-    En el PDF el punto representa separador de miles.
+        32.500       -> 32500
+        1.250.000    -> 1250000
+        7.110.218    -> 7110218
     """
 
     if valor is None:
@@ -53,19 +153,19 @@ def limpiar_numero_monetario(valor):
 
     texto = str(valor).strip()
 
-    if texto == "":
+    if not texto:
         return 0.0
 
     texto = texto.replace("$", "")
     texto = texto.replace(" ", "")
 
     # Formato colombiano:
-    # 32.500 -> 32500
+    # 7.110.218
     if "." in texto and "," not in texto:
         texto = texto.replace(".", "")
 
-    # Ejemplo:
-    # 32.500,50 -> 32500.50
+    # Formato:
+    # 7.110.218,50
     elif "." in texto and "," in texto:
         texto = texto.replace(".", "")
         texto = texto.replace(",", ".")
@@ -80,28 +180,9 @@ def limpiar_numero_monetario(valor):
         return 0.0
 
 
-def normalizar_codigo(codigo):
-    """
-    Mantiene los ceros iniciales.
-
-    Ejemplo:
-
-        056841
-
-    NO se convierte en:
-
-        56841
-    """
-
-    if codigo is None:
-        return ""
-
-    return str(codigo).strip()
-
-
 def convertir_cantidad(valor):
     """
-    Convierte una cantidad a número.
+    Convierte cantidades.
     """
 
     if valor is None:
@@ -109,73 +190,139 @@ def convertir_cantidad(valor):
 
     texto = str(valor).strip()
 
-    if texto == "":
+    if not texto:
         return 0.0
 
+    texto = texto.replace(",", ".")
+
     try:
-        return float(texto.replace(",", "."))
+        return float(texto)
 
     except ValueError:
         return 0.0
 
 
-# ============================================================
-# DETECTAR ENCABEZADO DE CLIENTE / RUTA
-# ============================================================
-
-def detectar_encabezado_cliente(linea):
+def normalizar_codigo(codigo):
     """
-    Detecta líneas reales del PDF como:
+    Conserva el código para mostrarlo.
 
-    0001       1224896397       Ruta: ML3E52
-    Fecha de Entrega: 06.10.2026
+    Ejemplo:
 
-    o:
+        056706 -> 056706
+        160318 -> 160318
+    """
 
-    0025       1210674829       Ruta: ML3E51
+    if codigo is None:
+        return ""
+
+    texto = str(codigo).strip()
+
+    # Si viene como 56706.0
+    if texto.endswith(".0"):
+        texto = texto[:-2]
+
+    return texto
+
+
+def codigo_clave(codigo):
+    """
+    Crea una clave de búsqueda que ignora ceros iniciales.
+
+    056706 -> 56706
+    56706  -> 56706
+    160318 -> 160318
+
+    Esto permite buscar el producto aunque el usuario
+    escriba o no los ceros iniciales.
+    """
+
+    texto = normalizar_codigo(codigo)
+
+    if not texto:
+        return ""
+
+    solo_digitos = re.sub(
+        r"\D",
+        "",
+        texto
+    )
+
+    if not solo_digitos:
+        return ""
+
+    try:
+        return str(
+            int(solo_digitos)
+        )
+
+    except ValueError:
+        return solo_digitos
+
+
+# ============================================================
+# DETECTAR RUTA EN ENCABEZADOS
+# ============================================================
+
+def detectar_ruta_en_linea(linea):
+    """
+    Busca específicamente:
+
+        Ruta: ML3E53
+
+    No busca simplemente ML3E porque dentro del PDF
+    también aparecen códigos como ML3E63.
     """
 
     if not linea:
         return None
 
-    linea = str(linea).strip()
-
-    # --------------------------------------------------------
-    # Buscar Ruta en cualquier posición de la línea.
-    # --------------------------------------------------------
-
-    match_ruta = re.search(
+    resultado = re.search(
         r"Ruta\s*:\s*(ML3E\d+)",
         linea,
         re.IGNORECASE
     )
 
-    if not match_ruta:
+    if resultado:
+        return resultado.group(1).upper()
+
+    return None
+
+
+# ============================================================
+# DETECTAR CLIENTE
+# ============================================================
+
+def detectar_cliente_encabezado(linea):
+    """
+    Detecta estructuras como:
+
+    0009 1224773744 Ruta: ML3E53 Fecha de Entrega: 06.10.2026
+
+    Devuelve:
+
+        NumeroCliente
+        Ruta
+    """
+
+    if not linea:
         return None
 
-    ruta = match_ruta.group(1).upper()
+    ruta = detectar_ruta_en_linea(linea)
 
-    # --------------------------------------------------------
-    # Número de cliente al principio.
-    #
-    # Ejemplo:
-    #
-    # 0001       1224896397       Ruta: ML3E52
-    #
-    # --------------------------------------------------------
+    if not ruta:
+        return None
 
-    match_cliente = re.match(
+    numero_cliente = ""
+
+    resultado_cliente = re.match(
         r"^\s*(\d{4})\b",
         linea
     )
 
-    if match_cliente:
-
-        numero_cliente = match_cliente.group(1)
-
-    else:
-
-        numero_cliente = ""
+    if resultado_cliente:
+        numero_cliente = (
+            resultado_cliente.group(1)
+        )
 
     return {
         "NumeroCliente": numero_cliente,
@@ -187,17 +334,16 @@ def detectar_encabezado_cliente(linea):
 # OBTENER NOMBRE DEL CLIENTE
 # ============================================================
 
-def obtener_nombre_cliente(lineas, indice_encabezado):
+def obtener_nombre_cliente(
+    lineas,
+    indice_encabezado
+):
     """
-    Después del encabezado del cliente normalmente aparece:
+    En el PDF normalmente la línea siguiente contiene:
 
-        NOMBRE DEL NEGOCIO
-        DIRECCIÓN
-        CONTACTO
-        TELÉFONO
+        NOMBRE DEL CLIENTE       DIRECCIÓN
 
-    Por eso tomamos la primera línea útil posterior
-    al encabezado.
+    Separamos usando los espacios grandes.
     """
 
     indice = indice_encabezado + 1
@@ -210,157 +356,231 @@ def obtener_nombre_cliente(lineas, indice_encabezado):
             indice += 1
             continue
 
-        # Si aparece otro cliente antes del nombre,
-        # detenemos la búsqueda.
-        if detectar_encabezado_cliente(linea):
+        # Si encontramos otro cliente, no hay nombre.
+        if detectar_cliente_encabezado(linea):
+            return "CLIENTE SIN NOMBRE"
 
-            break
+        # Ignorar algunos encabezados.
+        texto_mayus = linea.upper()
 
-        # Evitar encabezados internos.
-        if "PEDIDO" in linea.upper():
-
+        if (
+            "PEDIDO" in texto_mayus
+            or "RUTA:" in texto_mayus
+            or "FECHA DE ENTREGA:" in texto_mayus
+        ):
             indice += 1
             continue
 
-        if "VENTA DE CONTADO" in linea.upper():
+        # Separar nombre y dirección.
+        partes = re.split(
+            r"\s{2,}",
+            linea
+        )
 
-            indice += 1
-            continue
+        if partes:
 
-        if "VENTA DE CRÉDITO" in linea.upper():
+            nombre = partes[0].strip()
 
-            indice += 1
-            continue
+            if nombre:
+                return nombre
 
-        if "RUTA:" in linea.upper():
-
-            indice += 1
-            continue
-
-        if "FECHA DE ENTREGA:" in linea.upper():
-
-            indice += 1
-            continue
-
-        return linea
+        indice += 1
 
     return "CLIENTE SIN NOMBRE"
 
 
 # ============================================================
-# ANALIZAR LÍNEA DE PRODUCTO
+# ANALIZAR PRODUCTO
 # ============================================================
 
 def analizar_linea_producto(linea):
     """
-    Detecta líneas como:
+    Detecta una línea real de producto.
 
-    4057271111 402537712 056841 FLASHUVA 1 32.500 32.500
+    Ejemplo:
 
-    4057501120 402537712 056706 QTC400
-    0 / 6 25.100 12.550
+    4057637803 402537714 160318 CC 400ML
+    2 30.000 60.000
 
-    4057636900 402537712 160318 CC 400ML
-    1 30.000 30.000
+    También:
+
+    4057624469 402537714 056705 QTC350
+    0 / 15 62.500 31.250
     """
 
     if not linea:
-
         return None
 
     linea = linea.strip()
 
     # --------------------------------------------------------
-    # Estructura:
-    #
-    # PEDIDO
-    # TRANSP.
-    # CODIGO
-    # DESCRIPCIÓN
-    # CAJAS
-    # / BOTELLAS
-    # PRECIO
-    # IMPORTE
-    #
-    # La descripción puede contener espacios.
+    # Pedido
+    # Transporte
+    # Código
+    # Descripción
+    # Cantidad
+    # Precio
+    # Importe
     # --------------------------------------------------------
 
     patron = re.compile(
         r"^\s*"
-        r"(\d+)\s+"                    # PEDIDO
-        r"(\d+)\s+"                    # TRANSPORTE
-        r"(\d{4,8})\s+"                # CODIGO
-        r"(.+?)\s+"                    # DESCRIPCIÓN
-        r"(\d+(?:\.\d+)?)"             # CAJAS
-        r"(?:\s*/\s*(\d+(?:\.\d+)?))?" # BOTELLAS
+        r"(\d{8,12})\s+"
+        r"(\d{7,12})\s+"
+        r"(\d{4,8})\s+"
+        r"(.+?)\s+"
+        r"("
+        r"(?:\d+(?:[.,]\d+)?\s*/\s*\d+(?:[.,]\d+)?)"
+        r"|"
+        r"(?:\d+(?:[.,]\d+)?)"
+        r")"
         r"\s+"
-        r"([\d.,]+)\s+"                # PRECIO
-        r"([\d.,]+)"                   # IMPORTE
-        r"(?:\s+.*)?$"
+        r"([\d.,]+)"
+        r"\s+"
+        r"([\d.,]+)"
+        r"(?:\s+.*)?$",
+        re.IGNORECASE
     )
 
-    match = patron.match(linea)
+    resultado = patron.match(linea)
 
-    if not match:
-
+    if not resultado:
         return None
 
-    pedido = match.group(1)
+    pedido = resultado.group(1)
 
-    transporte = match.group(2)
+    transporte = resultado.group(2)
 
-    codigo = match.group(3)
+    codigo = resultado.group(3)
 
-    producto = match.group(4).strip()
+    descripcion = resultado.group(4).strip()
 
-    cajas = convertir_cantidad(
-        match.group(5)
-    )
+    cantidad_texto = resultado.group(5)
 
+    precio_texto = resultado.group(6)
+
+    importe_texto = resultado.group(7)
+
+    # --------------------------------------------------------
+    # CANTIDADES
+    # --------------------------------------------------------
+
+    cajas = 0.0
     botellas = 0.0
 
-    if match.group(6):
+    if "/" in cantidad_texto:
 
-        botellas = convertir_cantidad(
-            match.group(6)
+        partes = cantidad_texto.split("/")
+
+        cajas = convertir_cantidad(
+            partes[0].strip()
         )
 
+        botellas = convertir_cantidad(
+            partes[1].strip()
+        )
+
+    else:
+
+        cajas = convertir_cantidad(
+            cantidad_texto
+        )
+
+    # --------------------------------------------------------
+    # VALORES
+    # --------------------------------------------------------
+
     precio = limpiar_numero_monetario(
-        match.group(7)
+        precio_texto
     )
 
     importe = limpiar_numero_monetario(
-        match.group(8)
+        importe_texto
     )
 
-    if not codigo:
-
-        return None
-
-    if not producto:
-
-        return None
-
     return {
-
         "Pedido": pedido,
-
         "Transporte": transporte,
-
-        "Código": normalizar_codigo(
-            codigo
-        ),
-
-        "Producto": producto,
-
+        "Código": normalizar_codigo(codigo),
+        "Codigo_Key": codigo_clave(codigo),
+        "Producto": descripcion,
         "Cajas": cajas,
-
         "Botellas": botellas,
-
-        "Precio_Unitario_Caja": precio,
-
+        "Precio_Unitario": precio,
         "Importe_Total": importe,
     }
+
+
+# ============================================================
+# EXTRAER TOTAL DE CONTADO DE UNA RUTA
+# ============================================================
+
+def extraer_total_contado(linea):
+    """
+    IMPORTANTE:
+
+    Solo acepta el resumen general:
+
+        Total Venta de Contado CO 7.110.218
+
+    NO acepta:
+
+        Total a Cobrar Cont/Prom/RecCredito/ComAdm 151.600
+
+    porque ese es el total de un cliente.
+    """
+
+    if not linea:
+        return None
+
+    patron = re.compile(
+        r"^\s*"
+        r"Total\s+"
+        r"Venta\s+de\s+Contado"
+        r"(?:\s+CO)?"
+        r"\s+"
+        r"([\d.,]+)"
+        r"\s*$",
+        re.IGNORECASE
+    )
+
+    resultado = patron.match(linea)
+
+    if not resultado:
+        return None
+
+    return limpiar_numero_monetario(
+        resultado.group(1)
+    )
+
+
+# ============================================================
+# EXTRAER CRÉDITO
+# ============================================================
+
+def extraer_total_credito(linea):
+
+    if not linea:
+        return None
+
+    patron = re.compile(
+        r"^\s*"
+        r"Total\s+"
+        r"Vta\s+CréditoFormal\s+CO"
+        r"\s+"
+        r"([\d.,]+)"
+        r"\s*$",
+        re.IGNORECASE
+    )
+
+    resultado = patron.match(linea)
+
+    if not resultado:
+        return None
+
+    return limpiar_numero_monetario(
+        resultado.group(1)
+    )
 
 
 # ============================================================
@@ -368,28 +588,36 @@ def analizar_linea_producto(linea):
 # ============================================================
 
 @st.cache_data
-def extraer_datos_completos(bytes_pdf):
+def extraer_datos_completos(
+    contenido_pdf
+):
 
     registros = []
 
     rutas_detectadas = set()
 
-    with pdfplumber.open(
-        io.BytesIO(bytes_pdf)
-    ) as pdf:
+    totales_por_ruta = {}
 
-        # ----------------------------------------------------
-        # Variables que conservan el estado actual
-        # ----------------------------------------------------
+    creditos_por_ruta = {}
+
+    clientes_por_ruta = {}
+
+    # --------------------------------------------------------
+    # PDF
+    # --------------------------------------------------------
+
+    with pdfplumber.open(
+        io.BytesIO(contenido_pdf)
+    ) as pdf:
 
         ruta_actual = None
 
-        cliente_actual = None
+        cliente_actual = "CLIENTE SIN NOMBRE"
 
-        numero_cliente_actual = None
+        numero_cliente_actual = ""
 
         # ----------------------------------------------------
-        # Recorrer páginas
+        # PÁGINAS
         # ----------------------------------------------------
 
         for numero_pagina, pagina in enumerate(
@@ -400,14 +628,32 @@ def extraer_datos_completos(bytes_pdf):
             texto = pagina.extract_text()
 
             if not texto:
-
                 continue
 
             lineas = texto.split("\n")
 
-            # ------------------------------------------------
-            # Recorrer líneas
-            # ------------------------------------------------
+            # =================================================
+            # PRIMERA PASADA:
+            # DETECTAR RUTA DE LA PÁGINA
+            # =================================================
+
+            rutas_pagina = set()
+
+            for linea in lineas:
+
+                ruta_linea = detectar_ruta_en_linea(
+                    linea
+                )
+
+                if ruta_linea:
+
+                    rutas_pagina.add(
+                        ruta_linea
+                    )
+
+            # =================================================
+            # PROCESAR LÍNEAS
+            # =================================================
 
             for indice, linea in enumerate(
                 lineas
@@ -416,14 +662,13 @@ def extraer_datos_completos(bytes_pdf):
                 linea_limpia = linea.strip()
 
                 if not linea_limpia:
-
                     continue
 
-                # ==================================================
-                # DETECTAR NUEVO CLIENTE
-                # ==================================================
+                # =================================================
+                # RUTA / CLIENTE
+                # =================================================
 
-                encabezado = detectar_encabezado_cliente(
+                encabezado = detectar_cliente_encabezado(
                     linea_limpia
                 )
 
@@ -446,64 +691,139 @@ def extraer_datos_completos(bytes_pdf):
                         indice
                     )
 
+                    clientes_por_ruta.setdefault(
+                        ruta_actual,
+                        set()
+                    )
+
+                    if numero_cliente_actual:
+
+                        clientes_por_ruta[
+                            ruta_actual
+                        ].add(
+                            numero_cliente_actual
+                        )
+
                     continue
 
-                # ==================================================
-                # DETECTAR PRODUCTO
-                # ==================================================
+                # =================================================
+                # TOTAL VENTA DE CONTADO
+                # =================================================
+
+                total_contado = extraer_total_contado(
+                    linea_limpia
+                )
+
+                if total_contado is not None:
+
+                    ruta_para_total = (
+                        ruta_actual
+                    )
+
+                    # Si la página tiene una sola ruta,
+                    # podemos utilizarla como respaldo.
+                    if (
+                        not ruta_para_total
+                        and len(rutas_pagina) == 1
+                    ):
+
+                        ruta_para_total = (
+                            list(rutas_pagina)[0]
+                        )
+
+                    if ruta_para_total:
+
+                        totales_por_ruta[
+                            ruta_para_total
+                        ] = total_contado
+
+                        rutas_detectadas.add(
+                            ruta_para_total
+                        )
+
+                    continue
+
+                # =================================================
+                # TOTAL CRÉDITO
+                # =================================================
+
+                total_credito = extraer_total_credito(
+                    linea_limpia
+                )
+
+                if total_credito is not None:
+
+                    ruta_para_credito = (
+                        ruta_actual
+                    )
+
+                    if (
+                        not ruta_para_credito
+                        and len(rutas_pagina) == 1
+                    ):
+
+                        ruta_para_credito = (
+                            list(rutas_pagina)[0]
+                        )
+
+                    if ruta_para_credito:
+
+                        creditos_por_ruta[
+                            ruta_para_credito
+                        ] = total_credito
+
+                    continue
+
+                # =================================================
+                # PRODUCTO
+                # =================================================
 
                 producto = analizar_linea_producto(
                     linea_limpia
                 )
 
-                if producto is not None:
+                if producto is None:
+                    continue
 
-                    producto["Ruta"] = ruta_actual
+                # Si todavía no tenemos ruta, no inventamos una.
+                if not ruta_actual:
+                    continue
 
-                    producto["NumeroCliente"] = (
-                        numero_cliente_actual
-                    )
+                producto["Ruta"] = ruta_actual
 
-                    producto["Cliente"] = (
-                        cliente_actual
-                    )
+                producto["NumeroCliente"] = (
+                    numero_cliente_actual
+                )
 
-                    producto["Pagina"] = (
-                        numero_pagina
-                    )
+                producto["Cliente"] = (
+                    cliente_actual
+                )
 
-                    registros.append(
-                        producto
-                    )
+                producto["Pagina"] = (
+                    numero_pagina
+                )
+
+                registros.append(
+                    producto
+                )
 
     # ============================================================
-    # CREAR DATAFRAME
+    # DATAFRAME
     # ============================================================
 
     columnas = [
-
         "Ruta",
-
         "NumeroCliente",
-
         "Cliente",
-
         "Código",
-
+        "Codigo_Key",
         "Producto",
-
         "Cajas",
-
         "Botellas",
-
-        "Precio_Unitario_Caja",
-
+        "Precio_Unitario",
         "Importe_Total",
-
         "Pedido",
-
         "Transporte",
-
         "Pagina",
     ]
 
@@ -513,8 +833,6 @@ def extraer_datos_completos(bytes_pdf):
             registros
         )
 
-        # Asegurar columnas
-
         for columna in columnas:
 
             if columna not in df.columns:
@@ -523,10 +841,6 @@ def extraer_datos_completos(bytes_pdf):
 
         df = df[columnas]
 
-        # Eliminar duplicados exactos
-
-        df = df.drop_duplicates()
-
     else:
 
         df = pd.DataFrame(
@@ -534,31 +848,117 @@ def extraer_datos_completos(bytes_pdf):
         )
 
     # ============================================================
-    # TOTALES POR RUTA
+    # ORDENAR
     # ============================================================
-
-    totales_por_ruta = {}
 
     if not df.empty:
 
-        totales = (
-            df.groupby("Ruta")[
-                "Importe_Total"
-            ]
-            .sum()
-            .to_dict()
+        df = df.sort_values(
+            by=[
+                "Ruta",
+                "NumeroCliente",
+                "Código",
+            ],
+            kind="stable"
+        ).reset_index(
+            drop=True
         )
 
-        for ruta, total in totales.items():
+    # ============================================================
+    # RUTAS
+    # ============================================================
 
-            totales_por_ruta[
-                ruta
-            ] = float(total)
+    rutas = sorted(
+        rutas_detectadas
+    )
 
     return (
         df,
         totales_por_ruta,
-        sorted(rutas_detectadas)
+        creditos_por_ruta,
+        rutas,
+        clientes_por_ruta,
+    )
+
+
+# ============================================================
+# CALCULAR VALORES DE DEVOLUCIÓN
+# ============================================================
+
+def calcular_valor_devolucion(
+    fila_producto,
+    cajas_devueltas,
+    botellas_devueltas
+):
+    """
+    Calcula usando el IMPORTE REAL del registro.
+
+    NO utiliza:
+
+        cantidad * precio
+
+    cuando el importe del PDF indica otra cosa.
+
+    Tampoco utiliza un factor fijo de 30.
+    """
+
+    importe_original = float(
+        fila_producto["Importe_Total"]
+    )
+
+    cajas_originales = float(
+        fila_producto["Cajas"]
+    )
+
+    botellas_originales = float(
+        fila_producto["Botellas"]
+    )
+
+    valor_cajas = 0.0
+
+    valor_botellas = 0.0
+
+    # --------------------------------------------------------
+    # SI LA LÍNEA ES POR CAJAS
+    # --------------------------------------------------------
+
+    if (
+        cajas_devueltas > 0
+        and cajas_originales > 0
+    ):
+
+        valor_por_caja = (
+            importe_original
+            / cajas_originales
+        )
+
+        valor_cajas = (
+            cajas_devueltas
+            * valor_por_caja
+        )
+
+    # --------------------------------------------------------
+    # SI LA LÍNEA ES POR BOTELLAS
+    # --------------------------------------------------------
+
+    if (
+        botellas_devueltas > 0
+        and botellas_originales > 0
+    ):
+
+        valor_por_botella = (
+            importe_original
+            / botellas_originales
+        )
+
+        valor_botellas = (
+            botellas_devueltas
+            * valor_por_botella
+        )
+
+    return (
+        valor_cajas
+        + valor_botellas
     )
 
 
@@ -580,29 +980,33 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown(
-        "### Pasos"
-    )
-
-    st.markdown(
         """
-        1. Sube el PDF diario.
-        2. Selecciona la ruta.
-        3. Digita los productos devueltos.
-        4. Consulta los clientes que recibieron cada producto.
-        5. Cruza el valor con LiquiYa.
+        ### Pasos
+
+        **1.** Sube el PDF diario.
+
+        **2.** Selecciona la ruta.
+
+        **3.** Busca el código devuelto.
+
+        **4.** Selecciona el cliente si es necesario.
+
+        **5.** Registra cajas/botellas.
+
+        **6.** Genera el comprobante.
         """
     )
 
 
 # ============================================================
-# SI NO HAY PDF
+# SIN PDF
 # ============================================================
 
 if pdf_subido is None:
 
     st.info(
-        "👋 Sube el archivo PDF de la planilla "
-        "en el panel izquierdo para comenzar."
+        "👋 Sube el PDF de la planilla de rutas "
+        "para comenzar."
     )
 
     st.stop()
@@ -613,26 +1017,30 @@ if pdf_subido is None:
 # ============================================================
 
 with st.spinner(
-    "🔎 Analizando PDF y estructurando pedidos..."
+    "🔎 Analizando PDF..."
 ):
 
-    contenido_pdf = pdf_subido.getvalue()
+    contenido_pdf = (
+        pdf_subido.getvalue()
+    )
 
     (
         df_entregas,
-        dict_totales,
-        rutas_disponibles
+        totales_por_ruta,
+        creditos_por_ruta,
+        rutas_disponibles,
+        clientes_por_ruta,
     ) = extraer_datos_completos(
         contenido_pdf
     )
 
 
 # ============================================================
-# MENSAJE DE RESULTADO
+# RESULTADO
 # ============================================================
 
 st.success(
-    f"✅ PDF analizado. "
+    f"✅ PDF analizado correctamente. "
     f"Se encontraron "
     f"{len(df_entregas)} líneas de productos."
 )
@@ -643,68 +1051,55 @@ st.success(
 # ============================================================
 
 with st.expander(
-    "🔍 Diagnóstico de lectura del PDF"
+    "🔍 Diagnóstico de lectura"
 ):
 
-    col1, col2, col3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
-    # --------------------------------------------------------
-    # Líneas
-    # --------------------------------------------------------
-
-    with col1:
+    with c1:
 
         st.metric(
             "Líneas de productos",
             len(df_entregas)
         )
 
-    # --------------------------------------------------------
-    # Clientes
-    # --------------------------------------------------------
-
-    with col2:
+    with c2:
 
         if not df_entregas.empty:
 
-            cantidad_clientes = (
+            clientes = (
                 df_entregas[
                     "NumeroCliente"
                 ]
-                .replace("", pd.NA)
+                .replace(
+                    "",
+                    pd.NA
+                )
                 .dropna()
                 .nunique()
             )
 
         else:
 
-            cantidad_clientes = 0
+            clientes = 0
 
         st.metric(
-            "Clientes detectados",
-            cantidad_clientes
+            "Clientes",
+            clientes
         )
 
-    # --------------------------------------------------------
-    # Rutas
-    # --------------------------------------------------------
-
-    with col3:
+    with c3:
 
         st.metric(
-            "Rutas detectadas",
+            "Rutas",
             len(rutas_disponibles)
         )
 
-    # --------------------------------------------------------
-    # Mostrar rutas
-    # --------------------------------------------------------
+    st.write(
+        "**Rutas detectadas:**"
+    )
 
     if rutas_disponibles:
-
-        st.write(
-            "**Rutas encontradas:**"
-        )
 
         st.write(
             ", ".join(
@@ -715,17 +1110,74 @@ with st.expander(
     else:
 
         st.warning(
-            "⚠️ No se detectaron rutas."
+            "No se detectaron rutas."
         )
 
     # --------------------------------------------------------
-    # Mostrar primeras filas
+    # TOTALES DETECTADOS
+    # --------------------------------------------------------
+
+    if totales_por_ruta:
+
+        st.write(
+            "### 💰 Totales de Venta de Contado detectados"
+        )
+
+        filas_totales = []
+
+        for ruta in sorted(
+            totales_por_ruta
+        ):
+
+            filas_totales.append(
+                {
+                    "Ruta":
+                        ruta,
+
+                    "Venta de Contado":
+                        totales_por_ruta[ruta],
+
+                    "Crédito":
+                        creditos_por_ruta.get(
+                            ruta,
+                            0.0
+                        ),
+
+                    "Clientes":
+                        len(
+                            clientes_por_ruta.get(
+                                ruta,
+                                set()
+                            )
+                        ),
+                }
+            )
+
+        df_totales = pd.DataFrame(
+            filas_totales
+        )
+
+        st.dataframe(
+            df_totales.style.format(
+                {
+                    "Venta de Contado":
+                        "${:,.2f}",
+
+                    "Crédito":
+                        "${:,.2f}",
+                }
+            ),
+            use_container_width=True
+        )
+
+    # --------------------------------------------------------
+    # MUESTRA DE PRODUCTOS
     # --------------------------------------------------------
 
     if not df_entregas.empty:
 
         st.write(
-            "### Primeras líneas detectadas"
+            "### 📦 Muestra de productos detectados"
         )
 
         st.dataframe(
@@ -735,13 +1187,13 @@ with st.expander(
 
 
 # ============================================================
-# SI NO SE ENCONTRARON RUTAS
+# VERIFICAR RUTAS
 # ============================================================
 
 if not rutas_disponibles:
 
     st.error(
-        "❌ No se encontraron rutas en el PDF."
+        "❌ No se pudieron detectar las rutas."
     )
 
     st.stop()
@@ -758,7 +1210,7 @@ st.subheader(
 )
 
 ruta_elegida = st.selectbox(
-    "Selecciona la Ruta a Liquidar:",
+    "Selecciona la ruta a liquidar:",
     rutas_disponibles
 )
 
@@ -774,17 +1226,26 @@ df_ruta_actual = df_entregas[
 
 
 # ============================================================
-# TOTAL DE LA RUTA
+# TOTAL REAL DEL LIBRO
 # ============================================================
 
-total_libro_ruta = dict_totales.get(
-    ruta_elegida,
-    0.0
+total_libro_ruta = float(
+    totales_por_ruta.get(
+        ruta_elegida,
+        0.0
+    )
+)
+
+total_credito_ruta = float(
+    creditos_por_ruta.get(
+        ruta_elegida,
+        0.0
+    )
 )
 
 
 # ============================================================
-# INFORMACIÓN GENERAL
+# MOSTRAR RESUMEN
 # ============================================================
 
 st.markdown("---")
@@ -794,59 +1255,87 @@ m1, m2, m3 = st.columns(3)
 with m1:
 
     st.metric(
-        "🚚 Ruta Activa",
+        "🚚 Ruta",
         ruta_elegida
     )
 
 with m2:
 
     st.metric(
-        "💰 Total Ruta",
+        "💰 Venta de Contado",
         f"${total_libro_ruta:,.2f}"
     )
 
 with m3:
 
     st.metric(
-        "📦 Líneas de Productos",
+        "📦 Líneas",
         len(df_ruta_actual)
     )
 
 
 # ============================================================
-# TABLA DE PRODUCTOS DE LA RUTA
+# VALIDACIÓN
 # ============================================================
 
 with st.expander(
-    "📦 Ver productos de la ruta"
+    "🧮 Validación del valor leído"
+):
+
+    st.write(
+        f"**Ruta seleccionada:** {ruta_elegida}"
+    )
+
+    st.write(
+        f"**Venta de Contado según el PDF:** "
+        f"${total_libro_ruta:,.2f}"
+    )
+
+    st.write(
+        f"**Vta CréditoFormal según el PDF:** "
+        f"${total_credito_ruta:,.2f}"
+    )
+
+    st.success(
+        "Este valor viene exclusivamente de la línea "
+        "'Total Venta de Contado' del resumen de la ruta. "
+        "No se suman los 'Total a Cobrar' de cada cliente."
+    )
+
+
+# ============================================================
+# CATÁLOGO
+# ============================================================
+
+with st.expander(
+    "📦 Ver productos leídos de esta ruta"
 ):
 
     if df_ruta_actual.empty:
 
         st.warning(
-            "No se encontraron productos "
-            "para esta ruta."
+            "No hay productos para esta ruta."
         )
 
     else:
 
-        tabla_ruta = df_ruta_actual[
-            [
-                "NumeroCliente",
-                "Cliente",
-                "Código",
-                "Producto",
-                "Cajas",
-                "Botellas",
-                "Precio_Unitario_Caja",
-                "Importe_Total",
-            ]
-        ].copy()
+        columnas_catalogo = [
+            "NumeroCliente",
+            "Cliente",
+            "Código",
+            "Producto",
+            "Cajas",
+            "Botellas",
+            "Precio_Unitario",
+            "Importe_Total",
+        ]
 
         st.dataframe(
-            tabla_ruta.style.format(
+            df_ruta_actual[
+                columnas_catalogo
+            ].style.format(
                 {
-                    "Precio_Unitario_Caja":
+                    "Precio_Unitario":
                         "${:,.2f}",
 
                     "Importe_Total":
@@ -858,60 +1347,251 @@ with st.expander(
 
 
 # ============================================================
-# DEVOLUCIONES
+# BUSCAR PRODUCTO
 # ============================================================
 
 st.markdown("---")
 
 st.subheader(
-    f"🔄 Registro de Devoluciones - {ruta_elegida}"
+    "🔎 Buscar producto devuelto"
+)
+
+codigo_busqueda = st.text_input(
+    "Código del producto:",
+    placeholder="Ejemplo: 160318 o 056706"
+)
+
+
+if codigo_busqueda.strip():
+
+    codigo_busqueda = normalizar_codigo(
+        codigo_busqueda
+    )
+
+    clave_busqueda = codigo_clave(
+        codigo_busqueda
+    )
+
+    coincidencias = df_ruta_actual[
+        df_ruta_actual["Codigo_Key"]
+        == clave_busqueda
+    ].copy()
+
+    # --------------------------------------------------------
+    # ENCONTRADO
+    # --------------------------------------------------------
+
+    if not coincidencias.empty:
+
+        nombre_producto = (
+            coincidencias.iloc[0]["Producto"]
+        )
+
+        st.success(
+            f"✅ Producto encontrado: "
+            f"{nombre_producto}"
+        )
+
+        st.write(
+            f"**Código ingresado:** "
+            f"`{codigo_busqueda}`"
+        )
+
+        st.write(
+            f"**Coincidencias en {ruta_elegida}:** "
+            f"{len(coincidencias)}"
+        )
+
+        columnas_clientes = [
+            "NumeroCliente",
+            "Cliente",
+            "Código",
+            "Producto",
+            "Cajas",
+            "Botellas",
+            "Precio_Unitario",
+            "Importe_Total",
+        ]
+
+        st.dataframe(
+            coincidencias[
+                columnas_clientes
+            ].style.format(
+                {
+                    "Precio_Unitario":
+                        "${:,.2f}",
+
+                    "Importe_Total":
+                        "${:,.2f}",
+                }
+            ),
+            use_container_width=True
+        )
+
+        # ----------------------------------------------------
+        # INFORMACIÓN SOBRE PRECIOS
+        # ----------------------------------------------------
+
+        valores_caja = []
+
+        valores_botella = []
+
+        for _, fila in coincidencias.iterrows():
+
+            importe = float(
+                fila["Importe_Total"]
+            )
+
+            cajas = float(
+                fila["Cajas"]
+            )
+
+            botellas = float(
+                fila["Botellas"]
+            )
+
+            if cajas > 0:
+
+                valores_caja.append(
+                    round(
+                        importe / cajas,
+                        2
+                    )
+                )
+
+            if botellas > 0:
+
+                valores_botella.append(
+                    round(
+                        importe / botellas,
+                        2
+                    )
+                )
+
+        valores_caja = sorted(
+            set(valores_caja)
+        )
+
+        valores_botella = sorted(
+            set(valores_botella)
+        )
+
+        if len(valores_caja) > 1:
+
+            st.warning(
+                "⚠️ Este producto aparece con "
+                "diferentes valores por caja. "
+                "Para una devolución exacta debes "
+                "seleccionar el cliente correspondiente."
+            )
+
+        elif len(valores_caja) == 1:
+
+            st.info(
+                f"Valor por caja encontrado: "
+                f"${valores_caja[0]:,.2f}"
+            )
+
+        if len(valores_botella) > 1:
+
+            st.warning(
+                "⚠️ Este producto aparece con "
+                "diferentes valores por botella."
+            )
+
+        elif len(valores_botella) == 1:
+
+            st.info(
+                f"Valor por botella encontrado: "
+                f"${valores_botella[0]:,.2f}"
+            )
+
+    # --------------------------------------------------------
+    # NO ENCONTRADO
+    # --------------------------------------------------------
+
+    else:
+
+        st.error(
+            f"❌ El código {codigo_busqueda} "
+            f"no aparece en la ruta {ruta_elegida}."
+        )
+
+        st.info(
+            "El sistema compara ignorando ceros iniciales. "
+            "Por ejemplo, 056706 y 56706 se consideran "
+            "el mismo código."
+        )
+
+
+# ============================================================
+# REGISTRO DE DEVOLUCIONES
+# ============================================================
+
+st.markdown("---")
+
+st.subheader(
+    f"🔄 Registro de devoluciones — {ruta_elegida}"
 )
 
 st.write(
     """
-    Ingresa el código del producto y la cantidad
-    devuelta.
+    Registra el código y las cantidades devueltas.
+
+    Si el mismo código tiene diferentes precios según
+    el cliente, podrás seleccionar el cliente para evitar
+    que el sistema invente un valor.
     """
 )
 
 
 # ============================================================
-# EDITOR DE DEVOLUCIONES
+# EDITOR
 # ============================================================
 
-df_devoluciones_base = pd.DataFrame(
+df_base_devoluciones = pd.DataFrame(
     [
         {
             "Código": "",
-            "Cajas_Devueltas": 0.0,
-            "Botellas_Devueltas": 0.0,
+            "Cliente": "",
+            "Cajas": 0.0,
+            "Botellas": 0.0,
         }
     ]
 )
 
 
-devoluciones_ingresadas = st.data_editor(
-    df_devoluciones_base,
-
+devoluciones = st.data_editor(
+    df_base_devoluciones,
     num_rows="dynamic",
-
     use_container_width=True,
-
+    key="tabla_devoluciones",
     column_config={
 
         "Código":
             st.column_config.TextColumn(
-                "Código del producto"
+                "Código",
+                help="Ejemplo: 160318 o 056706"
             ),
 
-        "Cajas_Devueltas":
+        "Cliente":
+            st.column_config.TextColumn(
+                "Cliente",
+                help=(
+                    "Opcional si el código tiene "
+                    "un único valor. Si tiene varios "
+                    "precios, selecciona/escribe el cliente."
+                )
+            ),
+
+        "Cajas":
             st.column_config.NumberColumn(
                 "Cajas devueltas",
                 min_value=0.0,
                 step=1.0
             ),
 
-        "Botellas_Devueltas":
+        "Botellas":
             st.column_config.NumberColumn(
                 "Botellas devueltas",
                 min_value=0.0,
@@ -930,263 +1610,327 @@ resumen_devoluciones = []
 total_valor_devuelto = 0.0
 
 
-for _, row in devoluciones_ingresadas.iterrows():
+for _, fila_dev in devoluciones.iterrows():
 
-    codigo_raw = row["Código"]
-
-    # --------------------------------------------------------
-    # Ignorar fila vacía
-    # --------------------------------------------------------
-
-    if codigo_raw is None:
-
-        continue
-
-    codigo_texto = str(
-        codigo_raw
-    ).strip()
-
-    if codigo_texto == "":
-
-        continue
-
-    if codigo_texto.lower() == "none":
-
-        continue
-
-    # --------------------------------------------------------
-    # Código
-    # --------------------------------------------------------
-
-    codigo = normalizar_codigo(
-        codigo_texto
+    codigo_ingresado = (
+        str(
+            fila_dev.get(
+                "Código",
+                ""
+            )
+        ).strip()
     )
 
-    # --------------------------------------------------------
-    # Cantidades
-    # --------------------------------------------------------
+    if (
+        not codigo_ingresado
+        or codigo_ingresado.lower() == "none"
+    ):
+        continue
+
+    clave = codigo_clave(
+        codigo_ingresado
+    )
 
     cajas_dev = convertir_cantidad(
-        row["Cajas_Devueltas"]
+        fila_dev.get(
+            "Cajas",
+            0
+        )
     )
 
     botellas_dev = convertir_cantidad(
-        row["Botellas_Devueltas"]
+        fila_dev.get(
+            "Botellas",
+            0
+        )
     )
 
-    if cajas_dev == 0 and botellas_dev == 0:
+    cliente_elegido = (
+        str(
+            fila_dev.get(
+                "Cliente",
+                ""
+            )
+        ).strip()
+    )
 
+    if (
+        cajas_dev == 0
+        and botellas_dev == 0
+    ):
         continue
 
-    # ========================================================
-    # BUSCAR CÓDIGO EN LA RUTA
-    # ========================================================
+    # --------------------------------------------------------
+    # BUSCAR CÓDIGO
+    # --------------------------------------------------------
 
-    coincidencias = df_ruta_actual[
-        df_ruta_actual["Código"].astype(str)
-        == codigo
-    ]
+    coincidencias_codigo = df_ruta_actual[
+        df_ruta_actual["Codigo_Key"]
+        == clave
+    ].copy()
 
-    # ========================================================
-    # NO ENCONTRADO
-    # ========================================================
+    # --------------------------------------------------------
+    # NO EXISTE
+    # --------------------------------------------------------
 
-    if coincidencias.empty:
+    if coincidencias_codigo.empty:
 
         resumen_devoluciones.append(
             {
-                "Código": codigo,
+                "Código":
+                    codigo_ingresado,
 
                 "Producto":
-                    "❌ NO ENCONTRADO EN LA RUTA",
+                    "NO ENCONTRADO",
 
-                "Cajas Dev.":
+                "Cliente":
+                    cliente_elegido,
+
+                "Cajas":
                     cajas_dev,
 
-                "Botellas Dev.":
+                "Botellas":
                     botellas_dev,
 
-                "Valor Devolución":
+                "Valor":
                     0.0,
 
                 "Estado":
-                    "Código no encontrado",
+                    "❌ Código no encontrado",
             }
         )
 
         continue
 
-    # ========================================================
-    # NOMBRE DEL PRODUCTO
-    # ========================================================
+    # --------------------------------------------------------
+    # FILTRAR CLIENTE SI SE INDICÓ
+    # --------------------------------------------------------
 
-    producto_nombre = str(
-        coincidencias.iloc[0][
+    coincidencias = (
+        coincidencias_codigo.copy()
+    )
+
+    if cliente_elegido:
+
+        coincidencias_cliente = (
+            coincidencias[
+                coincidencias[
+                    "Cliente"
+                ].astype(str).str.contains(
+                    cliente_elegido,
+                    case=False,
+                    na=False
+                )
+            ]
+        )
+
+        if not coincidencias_cliente.empty:
+
+            coincidencias = (
+                coincidencias_cliente
+            )
+
+    # --------------------------------------------------------
+    # SI HAY VARIOS VALORES POSIBLES
+    # --------------------------------------------------------
+
+    valores_posibles = []
+
+    for _, fila_producto in coincidencias.iterrows():
+
+        importe = float(
+            fila_producto["Importe_Total"]
+        )
+
+        cajas = float(
+            fila_producto["Cajas"]
+        )
+
+        botellas = float(
+            fila_producto["Botellas"]
+        )
+
+        if (
+            cajas > 0
+            and cajas_dev > 0
+        ):
+
+            valores_posibles.append(
+                round(
+                    importe / cajas,
+                    2
+                )
+            )
+
+        if (
+            botellas > 0
+            and botellas_dev > 0
+        ):
+
+            valores_posibles.append(
+                round(
+                    importe / botellas,
+                    2
+                )
+            )
+
+    valores_unicos = sorted(
+        set(valores_posibles)
+    )
+
+    # --------------------------------------------------------
+    # SI HAY VARIOS VALORES Y NO SE ESCOGIÓ CLIENTE
+    # --------------------------------------------------------
+
+    if (
+        len(valores_unicos) > 1
+        and not cliente_elegido
+    ):
+
+        resumen_devoluciones.append(
+            {
+                "Código":
+                    codigo_ingresado,
+
+                "Producto":
+                    coincidencias.iloc[0][
+                        "Producto"
+                    ],
+
+                "Cliente":
+                    "SELECCIONAR CLIENTE",
+
+                "Cajas":
+                    cajas_dev,
+
+                "Botellas":
+                    botellas_dev,
+
+                "Valor":
+                    0.0,
+
+                "Estado":
+                    "⚠️ Hay diferentes valores. "
+                    "Selecciona el cliente.",
+            }
+        )
+
+        continue
+
+    # --------------------------------------------------------
+    # SI SE ESCRIBIÓ CLIENTE PERO NO COINCIDIÓ
+    # --------------------------------------------------------
+
+    if (
+        cliente_elegido
+        and coincidencias.equals(
+            coincidencias_codigo
+        )
+        and len(coincidencias_codigo) > 1
+    ):
+
+        resumen_devoluciones.append(
+            {
+                "Código":
+                    codigo_ingresado,
+
+                "Producto":
+                    coincidencias_codigo.iloc[0][
+                        "Producto"
+                    ],
+
+                "Cliente":
+                    "CLIENTE NO IDENTIFICADO",
+
+                "Cajas":
+                    cajas_dev,
+
+                "Botellas":
+                    botellas_dev,
+
+                "Valor":
+                    0.0,
+
+                "Estado":
+                    "⚠️ No coincidió el cliente.",
+            }
+        )
+
+        continue
+
+    # --------------------------------------------------------
+    # TOMAR REGISTRO
+    # --------------------------------------------------------
+
+    producto_original = (
+        coincidencias.iloc[0]
+    )
+
+    nombre_producto = (
+        producto_original[
             "Producto"
         ]
     )
 
-
-    # ========================================================
-    # CÁLCULO DEL VALOR DEVUELTO
-    # ========================================================
-
-    valor_cajas = 0.0
-
-    valor_botellas = 0.0
-
+    cliente_original = (
+        producto_original[
+            "Cliente"
+        ]
+    )
 
     # --------------------------------------------------------
-    # Valores encontrados en PDF
+    # CALCULAR
     # --------------------------------------------------------
-
-    valores_por_caja = []
-
-    valores_por_botella = []
-
-
-    for _, producto_original in coincidencias.iterrows():
-
-        cajas_originales = float(
-            producto_original[
-                "Cajas"
-            ]
-        )
-
-        botellas_originales = float(
-            producto_original[
-                "Botellas"
-            ]
-        )
-
-        importe_original = float(
-            producto_original[
-                "Importe_Total"
-            ]
-        )
-
-        # ----------------------------------------------------
-        # Si el registro corresponde a cajas
-        # ----------------------------------------------------
-
-        if cajas_originales > 0:
-
-            valor_por_caja = (
-                importe_original
-                / cajas_originales
-            )
-
-            valores_por_caja.append(
-                valor_por_caja
-            )
-
-        # ----------------------------------------------------
-        # Si el registro corresponde a botellas
-        # ----------------------------------------------------
-
-        if botellas_originales > 0:
-
-            valor_por_botella = (
-                importe_original
-                / botellas_originales
-            )
-
-            valores_por_botella.append(
-                valor_por_botella
-            )
-
-
-    # ========================================================
-    # VALOR DE CAJAS
-    # ========================================================
-
-    if cajas_dev > 0:
-
-        if valores_por_caja:
-
-            valor_promedio_caja = (
-                sum(valores_por_caja)
-                / len(valores_por_caja)
-            )
-
-            valor_cajas = (
-                cajas_dev
-                * valor_promedio_caja
-            )
-
-
-    # ========================================================
-    # VALOR DE BOTELLAS
-    # ========================================================
-
-    if botellas_dev > 0:
-
-        if valores_por_botella:
-
-            valor_promedio_botella = (
-                sum(valores_por_botella)
-                / len(valores_por_botella)
-            )
-
-            valor_botellas = (
-                botellas_dev
-                * valor_promedio_botella
-            )
-
-
-    # ========================================================
-    # TOTAL DEVOLUCIÓN
-    # ========================================================
 
     valor_devolucion = (
-        valor_cajas
-        + valor_botellas
+        calcular_valor_devolucion(
+            producto_original,
+            cajas_dev,
+            botellas_dev
+        )
     )
 
+    # --------------------------------------------------------
+    # SI NO PUDO CALCULAR
+    # --------------------------------------------------------
 
-    total_valor_devuelto += (
-        valor_devolucion
-    )
-
-
-    # ========================================================
-    # ESTADO
-    # ========================================================
-
-    estado = "✅ Calculado"
-
-
-    if (
-        botellas_dev > 0
-        and not valores_por_botella
-    ):
+    if valor_devolucion <= 0:
 
         estado = (
-            "⚠️ Revisar: "
-            "no hay presentación por botella "
-            "identificada en el PDF"
+            "⚠️ No fue posible calcular "
+            "el valor con esta presentación."
         )
 
+    else:
 
-    # ========================================================
-    # GUARDAR RESULTADO
-    # ========================================================
+        estado = "✅ Calculado"
+
+        total_valor_devuelto += (
+            valor_devolucion
+        )
+
+    # --------------------------------------------------------
+    # GUARDAR
+    # --------------------------------------------------------
 
     resumen_devoluciones.append(
         {
             "Código":
-                codigo,
+                codigo_ingresado,
 
             "Producto":
-                producto_nombre,
+                nombre_producto,
 
-            "Cajas Dev.":
+            "Cliente":
+                cliente_original,
+
+            "Cajas":
                 cajas_dev,
 
-            "Botellas Dev.":
+            "Botellas":
                 botellas_dev,
 
-            "Valor Devolución":
+            "Valor":
                 valor_devolucion,
 
             "Estado":
@@ -1196,13 +1940,13 @@ for _, row in devoluciones_ingresadas.iterrows():
 
 
 # ============================================================
-# RESUMEN DE DEVOLUCIONES
+# RESUMEN
 # ============================================================
 
 st.markdown("---")
 
 st.subheader(
-    "📋 Resumen de Devoluciones"
+    "📋 Resumen de devoluciones"
 )
 
 
@@ -1215,7 +1959,7 @@ if resumen_devoluciones:
     st.dataframe(
         df_resumen.style.format(
             {
-                "Valor Devolución":
+                "Valor":
                     "${:,.2f}"
             }
         ),
@@ -1225,8 +1969,7 @@ if resumen_devoluciones:
 else:
 
     st.info(
-        "Ingresa al menos un código y una "
-        "cantidad para calcular la devolución."
+        "Todavía no hay devoluciones registradas."
     )
 
 
@@ -1247,18 +1990,18 @@ st.subheader(
 )
 
 
-col_liq1, col_liq2, col_liq3 = st.columns(3)
+l1, l2, l3 = st.columns(3)
 
 
-with col_liq1:
+with l1:
 
     st.metric(
-        "Total Libro",
+        "Venta de Contado",
         f"${total_libro_ruta:,.2f}"
     )
 
 
-with col_liq2:
+with l2:
 
     st.metric(
         "Devoluciones",
@@ -1266,10 +2009,10 @@ with col_liq2:
     )
 
 
-with col_liq3:
+with l3:
 
     st.metric(
-        "Neto a Liquidar",
+        "NETO A LIQUIDAR",
         f"${neto_a_liquidar:,.2f}"
     )
 
@@ -1289,285 +2032,345 @@ if resumen_devoluciones:
 
     for devolucion in resumen_devoluciones:
 
-        codigo_dev = str(
+        codigo = str(
             devolucion["Código"]
         )
 
-        producto_dev = str(
-            devolucion["Producto"]
+        clave = codigo_clave(
+            codigo
         )
 
-        # ----------------------------------------------------
-        # Buscar todas las apariciones
-        # ----------------------------------------------------
-
-        tiendas_afectadas = df_ruta_actual[
-            df_ruta_actual["Código"].astype(str)
-            == codigo_dev
+        coincidencias = df_ruta_actual[
+            df_ruta_actual["Codigo_Key"]
+            == clave
         ]
+
+        if coincidencias.empty:
+
+            continue
 
         with st.expander(
-            f"📦 {producto_dev} "
-            f"— Código {codigo_dev}"
+            f"📦 {devolucion['Producto']} "
+            f"— Código {codigo}"
         ):
 
-            if tiendas_afectadas.empty:
+            st.write(
+                "Estos son los clientes de la ruta "
+                "que tienen este producto:"
+            )
 
-                st.warning(
-                    "No se encontraron clientes "
-                    "para este código."
-                )
+            columnas = [
+                "NumeroCliente",
+                "Cliente",
+                "Código",
+                "Producto",
+                "Cajas",
+                "Botellas",
+                "Precio_Unitario",
+                "Importe_Total",
+            ]
 
-            else:
+            st.dataframe(
+                coincidencias[
+                    columnas
+                ].style.format(
+                    {
+                        "Precio_Unitario":
+                            "${:,.2f}",
 
-                st.write(
-                    "### Clientes que recibieron este producto"
-                )
-
-                columnas_cliente = [
-
-                    "NumeroCliente",
-
-                    "Cliente",
-
-                    "Código",
-
-                    "Producto",
-
-                    "Cajas",
-
-                    "Botellas",
-
-                    "Precio_Unitario_Caja",
-
-                    "Importe_Total",
-                ]
-
-                tabla_clientes = (
-                    tiendas_afectadas[
-                        columnas_cliente
-                    ]
-                    .copy()
-                )
-
-                st.dataframe(
-                    tabla_clientes.style.format(
-                        {
-                            "Precio_Unitario_Caja":
-                                "${:,.2f}",
-
-                            "Importe_Total":
-                                "${:,.2f}",
-                        }
-                    ),
-                    use_container_width=True
-                )
-
-
-else:
-
-    st.info(
-        "Cuando registres una devolución, "
-        "aquí aparecerán automáticamente "
-        "los clientes que recibieron ese producto."
-    )
+                        "Importe_Total":
+                            "${:,.2f}",
+                    }
+                ),
+                use_container_width=True
+            )
 
 
 # ============================================================
-# BUSCADOR MANUAL DE PRODUCTOS
+# GENERAR COMPROBANTE
 # ============================================================
 
 st.markdown("---")
 
 st.subheader(
-    "🔎 Buscar un producto en la ruta"
-)
-
-codigo_busqueda = st.text_input(
-    "Escribe un código de producto:",
-    placeholder="Ejemplo: 160318"
+    "🖨️ Comprobante profesional"
 )
 
 
-if codigo_busqueda.strip():
-
-    codigo_busqueda = normalizar_codigo(
-        codigo_busqueda
-    )
-
-    resultados_busqueda = df_ruta_actual[
-        df_ruta_actual["Código"].astype(str)
-        == codigo_busqueda
-    ]
-
-    if resultados_busqueda.empty:
-
-        st.warning(
-            f"❌ El código {codigo_busqueda} "
-            f"no aparece en la ruta {ruta_elegida}."
-        )
-
-    else:
-
-        st.success(
-            f"✅ El código {codigo_busqueda} "
-            f"aparece {len(resultados_busqueda)} vez/veces "
-            f"en la ruta {ruta_elegida}."
-        )
-
-        columnas_busqueda = [
-
-            "NumeroCliente",
-
-            "Cliente",
-
-            "Código",
-
-            "Producto",
-
-            "Cajas",
-
-            "Botellas",
-
-            "Precio_Unitario_Caja",
-
-            "Importe_Total",
-        ]
-
-        st.dataframe(
-            resultados_busqueda[
-                columnas_busqueda
-            ].style.format(
-                {
-                    "Precio_Unitario_Caja":
-                        "${:,.2f}",
-
-                    "Importe_Total":
-                        "${:,.2f}",
-                }
-            ),
-            use_container_width=True
-        )
-
-
-# ============================================================
-# REPORTE PARA IMPRESIÓN
-# ============================================================
-
-st.markdown("---")
-
-st.subheader(
-    "🖨️ Reporte de Liquidación"
+st.write(
+    "Genera una vista limpia para imprimir "
+    "o guardar como PDF desde el navegador."
 )
 
 
 if st.button(
-    "📄 Generar Vista de Impresión"
+    "🧾 Generar comprobante",
+    use_container_width=True
 ):
 
-    filas_html = ""
+    fecha_actual = datetime.now().strftime(
+        "%d/%m/%Y %H:%M"
+    )
 
-    for devolucion in resumen_devoluciones:
+    filas_reporte = ""
 
-        filas_html += f"""
+    for _, fila in pd.DataFrame(
+        resumen_devoluciones
+    ).iterrows():
+
+        filas_reporte += f"""
         <tr>
-            <td>{devolucion['Código']}</td>
-
-            <td>{devolucion['Producto']}</td>
-
-            <td>{devolucion['Cajas Dev.']}</td>
-
-            <td>{devolucion['Botellas Dev.']}</td>
-
-            <td>
-                ${devolucion['Valor Devolución']:,.2f}
+            <td class="centro">
+                {fila.get("Código", "")}
             </td>
 
-            <td>{devolucion['Estado']}</td>
+            <td>
+                {fila.get("Producto", "")}
+            </td>
+
+            <td>
+                {fila.get("Cliente", "")}
+            </td>
+
+            <td class="centro">
+                {fila.get("Cajas", 0):,.0f}
+            </td>
+
+            <td class="centro">
+                {fila.get("Botellas", 0):,.0f}
+            </td>
+
+            <td class="derecha">
+                ${fila.get("Valor", 0):,.2f}
+            </td>
+
+            <td>
+                {fila.get("Estado", "")}
+            </td>
         </tr>
         """
 
-    st.markdown(
-        f"""
-        <div style="
-            background:white;
-            color:black;
-            padding:30px;
-            border:2px solid #333;
-            border-radius:10px;
-        ">
+    html_reporte = f"""
+    <div class="reporte-impresion">
 
-            <h2 style="text-align:center;">
+        <div style="text-align:center;">
+
+            <h1>
                 DISTRIBUCIONES INESCO S.A.S.
+            </h1>
+
+            <h2>
+                COMPROBANTE DE DEVOLUCIÓN
             </h2>
 
-            <h3 style="text-align:center;">
-                REPORTE DE LIQUIDACIÓN
-                Y DEVOLUCIONES
-            </h3>
-
-            <hr>
-
             <p>
-                <b>Ruta:</b>
-                {ruta_elegida}
-            </p>
-
-            <p>
-                <b>Total Libro:</b>
-                ${total_libro_ruta:,.2f}
-            </p>
-
-            <p>
-                <b>Total Devoluciones:</b>
-                - ${total_valor_devuelto:,.2f}
-            </p>
-
-            <h3>
-                NETO A LIQUIDAR:
-                ${neto_a_liquidar:,.2f}
-            </h3>
-
-            <hr>
-
-            <h3>
-                Detalle de Devoluciones
-            </h3>
-
-            <table style="
-                width:100%;
-                border-collapse:collapse;
-            ">
-
-                <tr>
-                    <th>Código</th>
-                    <th>Producto</th>
-                    <th>Cajas</th>
-                    <th>Botellas</th>
-                    <th>Valor</th>
-                    <th>Estado</th>
-                </tr>
-
-                {filas_html}
-
-            </table>
-
-            <br><br>
-
-            <p>
-                ______________________________
-            </p>
-
-            <p>
-                Firma del Conductor / Liquidador
+                Liquidación de Ruta
             </p>
 
         </div>
-        """,
+
+        <hr>
+
+        <table>
+
+            <tr>
+                <td>
+                    <b>Ruta</b>
+                </td>
+
+                <td>
+                    {ruta_elegida}
+                </td>
+
+                <td>
+                    <b>Fecha</b>
+                </td>
+
+                <td>
+                    {fecha_actual}
+                </td>
+            </tr>
+
+            <tr>
+                <td>
+                    <b>Venta de Contado</b>
+                </td>
+
+                <td>
+                    ${total_libro_ruta:,.2f}
+                </td>
+
+                <td>
+                    <b>Crédito</b>
+                </td>
+
+                <td>
+                    ${total_credito_ruta:,.2f}
+                </td>
+            </tr>
+
+        </table>
+
+        <h3>
+            Detalle de productos devueltos
+        </h3>
+
+        <table>
+
+            <thead>
+
+                <tr>
+
+                    <th>
+                        Código
+                    </th>
+
+                    <th>
+                        Producto
+                    </th>
+
+                    <th>
+                        Cliente
+                    </th>
+
+                    <th>
+                        Cajas
+                    </th>
+
+                    <th>
+                        Botellas
+                    </th>
+
+                    <th>
+                        Valor
+                    </th>
+
+                    <th>
+                        Estado
+                    </th>
+
+                </tr>
+
+            </thead>
+
+            <tbody>
+
+                {filas_reporte}
+
+            </tbody>
+
+        </table>
+
+        <br>
+
+        <table>
+
+            <tr>
+
+                <td>
+                    <b>Total Venta de Contado</b>
+                </td>
+
+                <td class="derecha">
+                    ${total_libro_ruta:,.2f}
+                </td>
+
+            </tr>
+
+            <tr>
+
+                <td>
+                    <b>Total Devoluciones</b>
+                </td>
+
+                <td class="derecha">
+                    - ${total_valor_devuelto:,.2f}
+                </td>
+
+            </tr>
+
+            <tr>
+
+                <td>
+                    <b>NETO A LIQUIDAR</b>
+                </td>
+
+                <td class="total-final">
+                    ${neto_a_liquidar:,.2f}
+                </td>
+
+            </tr>
+
+        </table>
+
+        <br><br>
+
+        <table>
+
+            <tr>
+
+                <td
+                    style="
+                    height:100px;
+                    text-align:center;
+                    vertical-align:bottom;
+                    "
+                >
+
+                    ___________________________<br>
+
+                    Firma del conductor
+
+                </td>
+
+                <td
+                    style="
+                    height:100px;
+                    text-align:center;
+                    vertical-align:bottom;
+                    "
+                >
+
+                    ___________________________<br>
+
+                    Firma del liquidador
+
+                </td>
+
+            </tr>
+
+        </table>
+
+        <br>
+
+        <p style="font-size:11px;color:#666;">
+
+            Documento generado automáticamente a partir
+            del libro de rutas.
+
+        </p>
+
+    </div>
+    """
+
+    st.markdown(
+        html_reporte,
         unsafe_allow_html=True
     )
 
     st.info(
-        "💡 Utiliza Ctrl + P para imprimir "
-        "o guardar el reporte como PDF."
+        "💡 Para imprimir: presiona Ctrl + P "
+        "y selecciona 'Guardar como PDF' o tu impresora."
     )
+
+
+# ============================================================
+# FINAL
+# ============================================================
+
+st.markdown("---")
+
+st.caption(
+    "InescoRoute • Lectura dinámica del libro de rutas "
+    "• Liquidación y control de devoluciones"
+)
