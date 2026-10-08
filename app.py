@@ -19,7 +19,7 @@ Módulo de Liquidación de Rutas y Cruce con LiquiYa
 
 @st.cache_data
 def extraer_datos_completos(archivo):
-  registros_entregas = []
+  registros_completos = []
   totales_por_ruta = {
       "ML3E51": 0.0,
       "ML3E52": 0.0,
@@ -45,7 +45,7 @@ def extraer_datos_completos(archivo):
 
       lineas = texto.split("\n")
 
-      # Extracción precisa de totales al final de los reportes/rutas
+      # Extraer total de la ruta
       for linea in lineas:
         if "Total a Cobrar" in linea or "Total a Cobrar Cont/Prom" in linea:
           partes = linea.split()
@@ -58,7 +58,7 @@ def extraer_datos_completos(archivo):
             except ValueError:
               pass
 
-      # Barrido para capturar el nombre del cliente actual en el bloque
+      # Detectar clientes y bloques de texto en el PDF
       for i, linea in enumerate(lineas):
         if "Fecha de Entrega:" in linea or "Ruta:" in linea:
           if i >= 2:
@@ -66,68 +66,68 @@ def extraer_datos_completos(archivo):
             if len(posible_cliente) > 2 and not posible_cliente.isdigit() and "ML3" not in posible_cliente and "CR" not in posible_cliente:
               cliente_actual = posible_cliente
 
-      # Extracción estructurada mediante tablas de pdfplumber
+      # Extracción mediante tablas nativas de pdfplumber (la forma más limpia)
       tablas = pagina.extract_tables()
       for tabla in tablas:
         for fila in tabla:
           fila_limpia = [
               str(cell).strip() for cell in fila if cell is not None and str(cell).strip() != ""
           ]
-          if len(fila_limpia) >= 3:
+          if len(fila_limpia) >= 2:
             codigo_encontrado = ""
             producto_encontrado = ""
-            cajas_orig = 0.0
-            botellas_orig = 0.0
+            cajas_val = 0.0
+            botellas_val = 0.0
             precio_unitario = 0.0
             importe_total = 0.0
 
             for cell in fila_limpia:
-              # Detectar código (número de 4 a 8 dígitos)
+              # Buscar código de producto (4 a 8 dígitos)
               if cell.isdigit() and 4 <= len(cell) <= 8:
                 codigo_encontrado = str(int(cell))
               elif not cell.isdigit() and len(cell) > 2 and "Venta" not in cell and "Ruta" not in cell and "SUB" not in cell and "Total" not in cell:
                 if producto_encontrado == "":
                   producto_encontrado = cell
 
-              # Detectar formato cajas y botellas (ej. "0 / 15", "1 / 30", etc.)
+              # Detectar formato cajas / botellas (ej. "0 / 15", "1 / 30")
               if "/" in cell:
                 partes_cb = cell.split("/")
                 try:
                   if len(partes_cb) == 2:
-                    cajas_orig = float(partes_orig_val := partes_cb[0].strip().split()[-1])
-                    botellas_orig = float(partes_cb[1].strip().split()[0])
+                    cajas_val = float(partes_cb[0].strip().split()[-1])
+                    botellas_val = float(partes_cb[1].strip().split()[0])
                 except Exception:
                   pass
 
-              # Limpiar y capturar valores monetarios (precios o importes)
-              cell_num_clean = cell.replace(".", "").replace(",", ".").replace("$", "")
+              # Limpiar y capturar montos (precios unitarios o importes)
+              cell_clean = cell.replace(".", "").replace(",", ".").replace("$", "")
               try:
-                num_val = float(cell_num_clean)
-                if 500 <= num_val <= 300000 and precio_unitario == 0.0:
-                  precio_unitario = num_val
-                elif num_val > 300000:
-                  importe_total = num_val
+                num = float(cell_clean)
+                if 200 <= num <= 200000 and precio_unitario == 0.0:
+                  precio_unitario = num
+                elif num > 200000:
+                  importe_total = num
               except ValueError:
                 pass
 
             if codigo_encontrado:
-              registros_entregas.append({
+              registros_completos.append({
                   "Ruta": ruta_actual,
                   "Cliente": cliente_actual,
                   "Código": codigo_encontrado,
                   "Producto": producto_encontrado if producto_encontrado else f"PRODUCTO REF {codigo_encontrado}",
-                  "Cajas_Originales": cajas_orig,
-                  "Botellas_Originales": botellas_orig,
+                  "Cajas": cajas_val,
+                  "Botellas": botellas_val,
                   "Precio_Unitario": precio_unitario,
                   "Importe_Total": importe_total
               })
 
-  if len(registros_entregas) > 0:
-    df_entregas = pd.DataFrame(registros_entregas)
+  if len(registros_completos) > 0:
+    df_result = pd.DataFrame(registros_completos)
   else:
-    df_entregas = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas_Originales", "Botellas_Originales", "Precio_Unitario", "Importe_Total"])
+    df_result = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas", "Botellas", "Precio_Unitario", "Importe_Total"])
 
-  return df_entregas, totales_por_ruta
+  return df_result, totales_por_ruta
 
 
 with st.sidebar:
@@ -143,9 +143,9 @@ with st.sidebar:
   st.markdown("4. Imprime y cruza con LiquiYa.")
 
 if pdf_subido is not None:
-  with st.spinner("Leyendo estructura y extrayendo datos del PDF..."):
+  with st.spinner("Analizando y estructurando el PDF de rutas..."):
     df_entregas, dict_totales = extraer_datos_completos(pdf_subido)
-  st.success("¡Archivo analizado con éxito!")
+  st.success("¡Archivo analizado correctamente!")
 
   rutas_disponibles = ["ML3E51", "ML3E52", "ML3E53"]
 
@@ -176,10 +176,11 @@ if pdf_subido is not None:
   m2.metric(f"Total Ruta ({ruta_elegida})", f"${total_libro_ruta:,.2f}")
   m3.metric("Plataforma de Cruce", "LiquiYa", "Listo para validar")
 
+  # Filtrar datos de la ruta seleccionada
   if not df_entregas.empty and "Ruta" in df_entregas.columns:
     df_ruta_actual = df_entregas[df_entregas["Ruta"] == ruta_elegida]
   else:
-    df_ruta_actual = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas_Originales", "Botellas_Originales", "Precio_Unitario", "Importe_Total"])
+    df_ruta_actual = pd.DataFrame(columns=["Ruta", "Cliente", "Código", "Producto", "Cajas", "Botellas", "Precio_Unitario", "Importe_Total"])
 
   st.subheader(
       f"🔄 Registro de Devoluciones del Camión - Ruta {ruta_elegida}"
@@ -198,6 +199,7 @@ if pdf_subido is not None:
 
   resumen_devoluciones = []
   total_valor_devuelto = 0.0
+  factor_caja = 30.0  # Factor estándar de botellas por caja
 
   for _, row in devoluciones_ingresadas.iterrows():
     codigo_raw = row["Código"]
@@ -222,40 +224,33 @@ if pdf_subido is not None:
     coincidencias = df_ruta_actual[df_ruta_actual["Código"].astype(str) == codigo]
 
     nombre_prod = f"PRODUCTO REF {codigo}"
-    precio_unitario_calculado = 0.0
-    factor_division = 30.0  # Factor estándar por defecto (ej. 30 botellas por caja)
+    precio_unitario_botella = 0.0
 
     if not coincidencias.empty:
-      # Tomamos el primer registro encontrado o sumamos valores si hay varios clientes
       match_row = coincidencias.iloc[0]
       nombre_prod = match_row["Producto"]
-      importe_t = match_row["Importe_Total"]
-      precio_u = match_row["Precio_Unitario"]
-      c_orig = match_row["Cajas_Originales"]
-      b_orig = match_row["Botellas_Originales"]
+      p_unit = match_row["Precio_Unitario"]
+      imp_tot = match_row["Importe_Total"]
+      c_orig = match_row["Cajas"]
+      b_orig = match_row["Botellas"]
 
-      # Determinar factor de unidades totales originales en esa venta
-      # Si se especifica cajas y botellas originales, calculamos total de unidades (ej: Cajas * 30 + Botellas)
-      unidades_totales_orig = (c_orig * factor_division) + b_orig
+      # Calcular el precio unitario real por botella de forma inteligente
+      unidades_totales_orig = (c_orig * factor_caja) + b_orig
 
-      if importe_t > 0 and unidades_totales_orig > 0:
-        # El precio unitario por botella sale de dividir el importe total entre las unidades totales vendidas
-        precio_unitario_calculado = importe_t / unidades_totales_orig
-      elif importe_t > 0 and c_orig > 0:
-        precio_unitario_calculado = importe_t / (c_orig * factor_division)
-      elif precio_u > 0:
-        # Si el precio unitario corresponde a caja, lo dividimos por el factor (30)
-        if precio_u > 5000:
-          precio_unitario_calculado = precio_u / factor_division
+      if imp_tot > 0 and unidades_totales_orig > 0:
+        precio_unitario_botella = imp_tot / unidades_totales_orig
+      elif p_unit > 0:
+        if p_unit > 5000:
+          precio_unitario_botella = p_unit / factor_caja
         else:
-          precio_unitario_calculado = precio_u
-    
-    if precio_unitario_calculado == 0.0:
-      # Valor estimado de respaldo si el PDF no trajo el importe explícito para esa línea exacta
-      precio_unitario_calculado = 900.0  # Ajustable según producto
+          precio_unitario_botella = p_unit
 
-    # Subtotal devolución = (Cajas devueltas * factor * precio_botella) + (Botellas devueltas * precio_botella)
-    subtotal_dev = (cajas_dev * factor_division * precio_unitario_calculado) + (botellas_dev * precio_unitario_calculado)
+    if precio_unitario_botella == 0.0:
+      precio_unitario_botella = 1200.0  # Valor base de respaldo ajustable
+
+    # Subtotal devolución = (Cajas devueltas * 30 + Botellas devueltas) * Precio Unitario por Botella
+    total_unidades_devueltas = (cajas_dev * factor_caja) + botellas_dev
+    subtotal_dev = total_unidades_devueltas * precio_unitario_botella
     total_valor_devuelto += subtotal_dev
 
     resumen_devoluciones.append({
@@ -263,7 +258,7 @@ if pdf_subido is not None:
         "Producto": nombre_prod,
         "Cajas Dev.": cajas_dev,
         "Botellas Dev.": botellas_dev,
-        "Precio Botella": precio_unitario_calculado,
+        "Precio Unitario (Botella)": precio_unitario_botella,
         "Subtotal Devolución": subtotal_dev,
     })
 
@@ -272,13 +267,13 @@ if pdf_subido is not None:
     st.subheader("📋 Resumen Financiero de Devoluciones")
     st.dataframe(
         df_resumen.style.format({
-            "Precio Botella": "${:,.2f}",
+            "Precio Unitario (Botella)": "${:,.2f}",
             "Subtotal Devolución": "${:,.2f}",
         }),
         use_container_width=True,
     )
   else:
-    df_resumen = pd.DataFrame(columns=["Código", "Producto", "Cajas Dev.", "Botellas Dev.", "Precio Botella", "Subtotal Devolución"])
+    df_resumen = pd.DataFrame(columns=["Código", "Producto", "Cajas Dev.", "Botellas Dev.", "Precio Unitario (Botella)", "Subtotal Devolución"])
     st.info("Digita un código y sus cantidades arriba para ver el cálculo automático.")
 
   neto_a_liquidar = total_libro_ruta - total_valor_devuelto
@@ -309,23 +304,22 @@ if pdf_subido is not None:
       ):
         if not tiendas_afectadas.empty:
           st.dataframe(
-              tiendas_afectadas[["Cliente", "Código", "Producto", "Cajas_Originales", "Botellas_Originales", "Precio_Unitario", "Importe_Total"]].style.format({
+              tiendas_afectadas[["Cliente", "Código", "Producto", "Cajas", "Botellas", "Precio_Unitario", "Importe_Total"]].style.format({
                   "Precio_Unitario": "${:,.2f}",
                   "Importe_Total": "${:,.2f}"
               }),
               use_container_width=True,
           )
         else:
-          st.info(f"ℹ️ Mostrando registros generales de la ruta para el código {codigo_dev}:")
-          st.dataframe(df_ruta_actual[["Cliente", "Código", "Producto"]].head(5), use_container_width=True)
+          st.warning(f"⚠️ No se encontraron clientes asociados directamente al código {codigo_dev} en esta ruta.")
   else:
     st.info("Agrega devoluciones para ver la trazabilidad de los clientes.")
 
-  with st.expander("🔍 Ver datos brutos extraídos del PDF"):
+  with st.expander("🔍 Ver catálogo completo extraído de la ruta"):
     if not df_ruta_actual.empty:
       st.dataframe(df_ruta_actual, use_container_width=True)
     else:
-      st.info("No se detectaron filas tabulares automáticas.")
+      st.info("No se detectaron registros tabulares en esta ruta.")
 
   st.markdown("---")
   st.subheader("🖨️ Reporte Listo para Imprimir o Guardar")
@@ -353,7 +347,7 @@ if pdf_subido is not None:
                 </tr>
         """
         + "".join([
-            f"<tr style='border-bottom: 1px solid #ddd;'><td>{r['Código']}</td><td>{r['Producto']}</td><td>{r['Cajas Dev.']}</td><td>{r['Botellas Dev.']}</td><td>${r['Precio Botella']:,.2f}</td><td>${r['Subtotal Devolución']:,.2f}</td></tr>"
+            f"<tr style='border-bottom: 1px solid #ddd;'><td>{r['Código']}</td><td>{r['Producto']}</td><td>{r['Cajas Dev.']}</td><td>{r['Botellas Dev.']}</td><td>${r['Precio Unitario (Botella)']:,.2f}</td><td>${r['Subtotal Devolución']:,.2f}</td></tr>"
             for r in resumen_devoluciones
         ])
         + """
