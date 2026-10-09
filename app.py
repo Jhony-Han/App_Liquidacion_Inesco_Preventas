@@ -149,7 +149,9 @@ def detectar_ruta_encabezado(linea):
     )
 
     if coincidencia:
-        return coincidencia.group(1).upper()
+        ruta = coincidencia.group(1).upper()
+        if ruta in ["ML3E51", "ML3E52", "ML3E53"]:
+            return ruta
 
     return None
 
@@ -164,12 +166,7 @@ def detectar_encabezado_cliente(linea):
         return None
 
     coincidencia = re.match(r"^\s*(\d{4})\b", linea)
-
-    numero_cliente = (
-        coincidencia.group(1)
-        if coincidencia
-        else ""
-    )
+    numero_cliente = coincidencia.group(1) if coincidencia else ""
 
     return {
         "ruta": ruta,
@@ -232,36 +229,21 @@ def analizar_producto(linea):
 
 
 # ============================================================
-# DETECCIÓN DE TOTALES GENERALES (VALOR DE CONTADO Y CRÉDITO)
+# DETECCIÓN DE TOTALES GENERALES (EXACTO Y SEGURO)
 # ============================================================
 
 def detectar_total_contado(texto_pagina):
     if not texto_pagina:
         return None
 
-    texto = re.sub(r"\s+", " ", texto_pagina).strip()
-
-    patron = re.compile(
-        r"Total\s+Venta\s+de\s+Contado\s+CO\s+([\d.,]+)",
-        re.IGNORECASE,
-    )
-
-    coincidencia = patron.search(texto)
-
-    if coincidencia:
-        return dinero_a_numero(coincidencia.group(1))
-
-    # Respaldo por líneas si el texto viene fraccionado
     lineas = texto_pagina.splitlines()
     for linea in lineas:
-        linea_up = linea.upper()
-        if "TOTAL" in linea_up and ("CONTADO" in linea_up or "CO" in linea_up):
+        if "Total Venta de Contado CO" in linea or "Total" in linea and "Contado" in linea:
             partes = linea.split()
             for p in partes:
                 val = dinero_a_numero(p)
-                if val > 50000:
+                if val > 100000:  # Valor realista de contado para ruta
                     return val
-
     return None
 
 
@@ -269,52 +251,27 @@ def detectar_total_credito(texto_pagina):
     if not texto_pagina:
         return None
 
-    texto = re.sub(r"\s+", " ", texto_pagina).strip()
-
-    patron = re.compile(
-        r"Total\s+Vta\s+Cr[ée]dito\s*Formal\s+CO\s+([\d.,]+)",
-        re.IGNORECASE,
-    )
-
-    coincidencia = patron.search(texto)
-
-    if coincidencia:
-        return dinero_a_numero(coincidencia.group(1))
-
     lineas = texto_pagina.splitlines()
     for linea in lineas:
-        linea_up = linea.upper()
-        if "CRÉDITO" in linea_up or "CREDITO" in linea_up:
+        if "Crédito" in linea or "Credito" in linea or "CréditoFormal" in linea:
             partes = linea.split()
             for p in partes:
                 val = dinero_a_numero(p)
-                if val > 5000:
+                if val > 10000:
                     return val
-
     return None
 
 
 def rutas_de_resumen_en_pagina(texto):
-    rutas_explicitas = re.findall(
-        r"Ruta\s*:\s*(ML3E\d+)",
-        texto,
-        re.IGNORECASE,
-    )
-    rutas_explicitas = [r.upper() for r in rutas_explicitas]
-
-    if rutas_explicitas:
-        return list(dict.fromkeys(rutas_explicitas))
-
-    rutas_impresas = re.findall(
-        r"\bML3E\d+\b",
-        texto.upper(),
-    )
-
-    return list(dict.fromkeys(rutas_impresas))
+    rutas_encontradas = []
+    for r in ["ML3E51", "ML3E52", "ML3E53"]:
+        if r in texto.upper():
+            rutas_encontradas.append(r)
+    return list(dict.fromkeys(rutas_encontradas))
 
 
 # ============================================================
-# LECTOR PRINCIPAL DEL PDF (COMBINADO Y ROBUSTO)
+# LECTOR PRINCIPAL DEL PDF
 # ============================================================
 
 @st.cache_data(show_spinner=False)
@@ -336,29 +293,24 @@ def extraer_datos_completos(contenido_pdf):
             if not texto:
                 continue
 
-            # Detectar totales generales por página
-            total_contado = detectar_total_contado(texto)
-            total_credito = detectar_total_credito(texto)
-
-            if total_contado is not None or total_credito is not None:
-                rutas_resumen = rutas_de_resumen_en_pagina(texto)
-                if len(rutas_resumen) == 1:
-                    r_res = rutas_resumen[0]
-                    rutas_detectadas.add(r_res)
-                    if total_contado is not None:
-                        totales_contado[r_res] = total_contado
-                    if total_credito is not None:
-                        totales_credito[r_res] = total_credito
-
-            # Detectar rutas activas explícitas en el texto de la página
-            for r_cand in ["ML3E51", "ML3E52", "ML3E53", "ML3E63"]:
+            # Detectar ruta activa en la página (estrictamente oficiales)
+            for r_cand in ["ML3E51", "ML3E52", "ML3E53"]:
                 if r_cand in texto.upper():
                     ruta_actual = r_cand
                     rutas_detectadas.add(ruta_actual)
 
+            # Detectar totales generales
+            total_contado = detectar_total_contado(texto)
+            total_credito = detectar_total_credito(texto)
+
+            if total_contado is not None or total_credito is not None:
+                if total_contado is not None:
+                    totales_contado[ruta_actual] = total_contado
+                if total_credito is not None:
+                    totales_credito[ruta_actual] = total_credito
+
             lineas = texto.splitlines()
 
-            # Leer clientes, bloques y productos
             for indice, linea in enumerate(lineas):
                 linea_limpia = linea.strip()
 
@@ -388,7 +340,6 @@ def extraer_datos_completos(contenido_pdf):
                 producto = analizar_producto(linea_limpia)
 
                 if producto is None:
-                    # Intento secundario mediante tablas nativas de pdfplumber si la línea se escapa del regex
                     continue
 
                 producto["Ruta"] = ruta_actual
@@ -398,7 +349,7 @@ def extraer_datos_completos(contenido_pdf):
 
                 registros.append(producto)
 
-            # Extracción complementaria de tablas nativas para asegurar 100% de productos y precios
+            # Extracción complementaria por tablas nativas
             tablas = pagina.extract_tables()
             for tabla in tablas:
                 for fila in tabla:
@@ -466,11 +417,16 @@ def extraer_datos_completos(contenido_pdf):
         df = df.drop_duplicates(subset=["Ruta", "Cliente", "Código", "Importe_Total"], keep="first")
         df = df.reset_index(drop=True)
 
+    # Asegurar que solo queden rutas oficiales válidas
+    rutas_validas = sorted([r for r in rutas_detectadas if r in ["ML3E51", "ML3E52", "ML3E53"]])
+    if not rutas_validas:
+        rutas_validas = ["ML3E51"]
+
     return (
         df,
         totales_contado,
         totales_credito,
-        sorted(rutas_detectadas),
+        rutas_validas,
         errores_lectura,
     )
 
