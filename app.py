@@ -238,11 +238,11 @@ def detectar_total_contado(texto_pagina):
 
     lineas = texto_pagina.splitlines()
     for linea in lineas:
-        if "Total Venta de Contado CO" in linea or "Total" in linea and "Contado" in linea:
+        if "Total Venta de Contado CO" in linea or ("Total" in linea and "Contado" in linea):
             partes = linea.split()
             for p in partes:
                 val = dinero_a_numero(p)
-                if val > 100000:  # Valor realista de contado para ruta
+                if val > 100000:
                     return val
     return None
 
@@ -257,9 +257,9 @@ def detectar_total_credito(texto_pagina):
             partes = linea.split()
             for p in partes:
                 val = dinero_a_numero(p)
-                if val > 10000:
+                if 10000 < val < 50000000:
                     return val
-    return None
+    return 0.0
 
 
 def rutas_de_resumen_en_pagina(texto):
@@ -293,21 +293,18 @@ def extraer_datos_completos(contenido_pdf):
             if not texto:
                 continue
 
-            # Detectar ruta activa en la página (estrictamente oficiales)
             for r_cand in ["ML3E51", "ML3E52", "ML3E53"]:
                 if r_cand in texto.upper():
                     ruta_actual = r_cand
                     rutas_detectadas.add(ruta_actual)
 
-            # Detectar totales generales
             total_contado = detectar_total_contado(texto)
             total_credito = detectar_total_credito(texto)
 
-            if total_contado is not None or total_credito is not None:
-                if total_contado is not None:
-                    totales_contado[ruta_actual] = total_contado
-                if total_credito is not None:
-                    totales_credito[ruta_actual] = total_credito
+            if total_contado is not None:
+                totales_contado[ruta_actual] = total_contado
+            if total_credito is not None and total_credito > 0:
+                totales_credito[ruta_actual] = total_credito
 
             lineas = texto.splitlines()
 
@@ -349,7 +346,6 @@ def extraer_datos_completos(contenido_pdf):
 
                 registros.append(producto)
 
-            # Extracción complementaria por tablas nativas
             tablas = pagina.extract_tables()
             for tabla in tablas:
                 for fila in tabla:
@@ -417,7 +413,6 @@ def extraer_datos_completos(contenido_pdf):
         df = df.drop_duplicates(subset=["Ruta", "Cliente", "Código", "Importe_Total"], keep="first")
         df = df.reset_index(drop=True)
 
-    # Asegurar que solo queden rutas oficiales válidas
     rutas_validas = sorted([r for r in rutas_detectadas if r in ["ML3E51", "ML3E52", "ML3E53"]])
     if not rutas_validas:
         rutas_validas = ["ML3E51"]
@@ -432,7 +427,7 @@ def extraer_datos_completos(contenido_pdf):
 
 
 # ============================================================
-# GENERAR UN PDF DE IMPRESIÓN PROFESIONAL
+# GENERAR UN PDF DE IMPRESIÓN PROFESIONAL (INTACTO)
 # ============================================================
 
 def generar_comprobante_pdf(
