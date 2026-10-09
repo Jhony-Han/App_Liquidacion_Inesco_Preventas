@@ -238,20 +238,34 @@ def analizar_producto(linea):
 def detectar_total_contado(texto_pagina):
     if not texto_pagina:
         return None
-
-    texto = re.sub(r"\s+", " ", texto_pagina).strip()
-
+    
+    # Normalizamos espacios y saltos de línea para buscar en bloque
+    texto_limpio = re.sub(r"\s+", " ", texto_pagina)
+    
+    # Buscamos la etiqueta y capturamos los números con puntos y comas siguientes
     patron = re.compile(
-        r"Total\s+Venta\s+de\s+Contado\s+CO\s+([\d.]+)",
+        r"Total\s+Venta\s+de\s+Contado\s+CO\s+([\d.,]+)",
         re.IGNORECASE,
     )
-
-    coincidencia = patron.search(texto)
-
-    if not coincidencia:
-        return None
-
-    return dinero_a_numero(coincidencia.group(1))
+    
+    coincidencia = patron.search(texto_limpio)
+    if coincidencia:
+        return dinero_a_numero(coincidencia.group(1))
+    
+    # Respaldo alternativo buscando por proximidad de palabras clave
+    if "Total Venta de Contado" in texto_pagina or "Venta de Contado" in texto_pagina:
+        lineas = texto_pagina.splitlines()
+        for i, linea in enumerate(lineas):
+            if "Contado" in linea:
+                # Revisar esta línea y la siguiente por si el número está abajo
+                for sub_linea in lineas[i:i+2]:
+                    palabras = sub_linea.split()
+                    for p in palabras:
+                        val = dinero_a_numero(p)
+                        if val > 100000: # Un total de ruta seguro es mayor a 100 mil pesos
+                            return val
+                            
+    return None
 
 
 def detectar_total_credito(texto_pagina):
