@@ -549,8 +549,8 @@ def generar_comprobante_pdf(
         "Código",
         "Producto",
         "Cliente (Pág. PDF)",
-        "Cajas",
-        "Botellas",
+        "Cajas Dev.",
+        "Botellas Dev.",
         "Valor devolución",
         "Estado",
     ]
@@ -751,7 +751,7 @@ with st.sidebar:
 
         1. Cargar el libro.
         2. Seleccionar la ruta.
-        3. Seleccionar producto y cliente.
+        3. Consultar y seleccionar en la ayuda visual.
         4. Descargar el comprobante PDF.
         """
     )
@@ -849,194 +849,128 @@ c3.metric(
 
 
 # ============================================================
-# REGISTRO DE DEVOLUCIONES INTELIGENTE CON SELECTOR DE CLIENTE
+# GESTIÓN DE DEVOLUCIONES (ESTADO EN SESSION_STATE)
+# ============================================================
+
+if "lista_devoluciones_activas" not in st.session_state:
+    st.session_state["lista_devoluciones_activas"] = []
+
+
+# ============================================================
+# PANEL DE SELECCIÓN INTELIGENTE DESDE LA AYUDA VISUAL
 # ============================================================
 
 st.divider()
-st.subheader("🔄 Registrar devoluciones por código y cliente")
+st.subheader("🔄 Selección y Consolidación de Devoluciones por Tienda")
 
 st.markdown(
-    "Ingresa el código del producto que deseas devolver. "
-    "El sistema buscará automáticamente en qué páginas del PDF aparece y te listará sus clientes."
+    "Escribe el código del producto devuelto. El sistema te mostrará **todas las tiendas (clientes)** "
+    "donde se vendió. Marca las casillas de selección, ajusta la cantidad devuelta en cada tienda y haz clic en "
+    "**'Incorporar a la liquidación'** para sumarlo automáticamente con su precio y descuento proporcional."
 )
 
-base_devoluciones = pd.DataFrame(
-    [
-        {
-            "Código Producto": "",
-            "Cliente Destino": "",
-            "Cajas Dev.": 0.0,
-            "Botellas Dev.": 0.0,
-        }
-    ]
+codigo_consulta = st.text_input(
+    "🔍 Ingresa o busca el código del producto:",
+    placeholder="Ej: 56624",
 )
 
-devoluciones_ingresadas = st.data_editor(
-    base_devoluciones,
-    num_rows="dynamic",
-    use_container_width=True,
-    key="editor_devoluciones",
-    column_config={
-        "Código Producto": st.column_config.TextColumn(
-            "Código de Producto",
-            help="Escribe el código (ej: 56624)",
-        ),
-        "Cliente Destino": st.column_config.TextColumn(
-            "Cliente (o escribe parte de él)",
-            help="Selecciona o escribe el cliente que aparece en el desplegable de abajo.",
-        ),
-        "Cajas Dev.": st.column_config.NumberColumn(
-            "Cajas devueltas",
-            min_value=0.0,
-            step=1.0,
-        ),
-        "Botellas Dev.": st.column_config.NumberColumn(
-            "Botellas devueltas",
-            min_value=0.0,
-            step=1.0,
-        ),
-    },
-)
+if codigo_consulta.strip():
+    clave_q = clave_codigo(codigo_consulta)
+    res_q = df_ruta_actual[df_ruta_actual["Codigo_Key"] == clave_q].copy()
 
-# Mostrar guía auxiliar rápida para ver las coincidencias por código en tiempo real
-with st.expander("👁️ Consultar clientes y páginas por código (Ayuda visual)"):
-    codigo_consulta = st.text_input("Escribe un código para ver sus clientes y páginas en el PDF:", placeholder="Ej: 56624")
-    if codigo_consulta.strip():
-        clave_q = clave_codigo(codigo_consulta)
-        res_q = df_ruta_actual[df_ruta_actual["Codigo_Key"] == clave_q]
-        if not res_q.empty:
-            st.dataframe(
-                res_q[["Código", "Producto", "Cliente", "Pagina", "Cajas", "Botellas", "Importe_Total"]].style.format({
-                    "Importe_Total": "${:,.0f}"
-                }),
-                use_container_width=True,
-            )
-        else:
-            st.info("No hay registros para este código en la ruta seleccionada.")
+    if not res_q.empty:
+        st.success(f"Producto encontrado: **{res_q.iloc[0]['Producto']}** | Coincidencias en {len(res_q)} cliente(s)")
 
+        # Preparamos dataframe interactivo para marcar con "churito" (checkbox) y cantidad
+        res_q["Seleccionar"] = False
+        res_q["Cajas_Devueltas"] = 0.0
+        res_q["Botellas_Devueltas"] = 0.0
 
-# ============================================================
-# CALCULAR DEVOLUCIONES
-# ============================================================
+        # Reordenamos columnas para que sea súper cómodo en pantalla
+        cols_mostrar = ["Seleccionar", "Pagina", "NumeroCliente", "Cliente", "Cajas", "Botellas", "Importe_Total", "Cajas_Devueltas", "Botellas_Devueltas"]
+        
+        # Filtramos columnas existentes por seguridad
+        cols_presentes = [c for c in cols_mostrar if c in res_q.columns]
 
-resumen_devoluciones = []
-total_valor_devuelto = 0.0
-
-for _, fila in devoluciones_ingresadas.iterrows():
-    codigo_ingresado = str(fila.get("Código Producto", "")).strip()
-
-    if not codigo_ingresado or codigo_ingresado.lower() == "none":
-        continue
-
-    cajas_dev = cantidad_a_numero(fila.get("Cajas Dev.", 0))
-    botellas_dev = cantidad_a_numero(fila.get("Botellas Dev.", 0))
-    cliente_elegido = str(fila.get("Cliente Destino", "")).strip()
-
-    if cajas_dev <= 0 and botellas_dev <= 0:
-        continue
-
-    clave = clave_codigo(codigo_ingresado)
-
-    coincidencias = df_ruta_actual[
-        df_ruta_actual["Codigo_Key"] == clave
-    ].copy()
-
-    if coincidencias.empty:
-        resumen_devoluciones.append(
-            {
-                "Código": codigo_ingresado,
-                "Producto": "NO ENCONTRADO",
-                "Cliente": cliente_elegido if cliente_elegido else "DESCONOCIDO",
-                "Pagina": "-",
-                "Cajas Dev.": cajas_dev,
-                "Botellas Dev.": botellas_dev,
-                "Subtotal Devolución": 0.0,
-                "Estado": "Código no encontrado",
-            }
+        # Usamos data_editor para la selección interactiva
+        df_seleccion_tiendas = st.data_editor(
+            res_q[cols_presentes],
+            hide_index=True,
+            use_container_width=True,
+            key=f"editor_tiendas_{clave_q}",
+            column_config={
+                "Seleccionar": st.column_config.CheckboxColumn("¿Devolver?", default=False),
+                "Pagina": st.column_config.NumberColumn("Pág. PDF", format="%d"),
+                "NumeroCliente": st.column_config.TextColumn("Nº Cliente"),
+                "Cliente": st.column_config.TextColumn("Nombre del Cliente"),
+                "Cajas": st.column_config.NumberColumn("Cajas Vendidas", format="%.1f"),
+                "Botellas": st.column_config.NumberColumn("Botellas Vendidas", format="%.1f"),
+                "Importe_Total": st.column_config.NumberColumn("Importe Total ($)", format="$%,.0f"),
+                "Cajas_Devueltas": st.column_config.NumberColumn("Cajas Devueltas", min_value=0.0, step=1.0),
+                "Botellas_Devueltas": st.column_config.NumberColumn("Botellas Devueltas", min_value=0.0, step=1.0),
+            },
         )
-        continue
 
-    if cliente_elegido:
-        filtradas = coincidencias[
-            coincidencias["Cliente"].astype(str).str.contains(
-                re.escape(cliente_elegido),
-                case=False,
-                na=False,
-            )
-        ]
-        if not filtradas.empty:
-            coincidencias = filtradas
+        if st.button("➕ Incorporar seleccionados a la liquidación", type="primary"):
+            agregados = 0
+            for idx, row in df_seleccion_tiendas.iterrows():
+                if row["Seleccionar"] and (row["Cajas_Devueltas"] > 0 or row["Botellas_Devueltas"] > 0):
+                    # Recuperamos los datos originales de la fila
+                    orig = res_q.loc[idx]
+                    
+                    cajas_dev = float(row["Cajas_Devueltas"])
+                    botellas_dev = float(row["Botellas_Devueltas"])
+                    
+                    cajas_orig = float(orig["Cajas"])
+                    botellas_orig = float(orig["Botellas"])
+                    importe_orig = float(orig["Importe_Total"])
 
-    if len(coincidencias) != 1:
-        resumen_devoluciones.append(
-            {
-                "Código": codigo_ingresado,
-                "Producto": coincidencias.iloc[0]["Producto"],
-                "Cliente": "ESPECIFIQUE CLIENTE (Ver ayuda arriba)",
-                "Pagina": "Varias",
-                "Cajas Dev.": cajas_dev,
-                "Botellas Dev.": botellas_dev,
-                "Subtotal Devolución": 0.0,
-                "Estado": "Múltiples clientes para este código; afina el nombre del cliente",
-            }
-        )
-        continue
+                    subtotal = 0.0
+                    if cajas_dev > 0 and cajas_orig > 0 and botellas_dev == 0:
+                        subtotal = (importe_orig / cajas_orig) * cajas_dev
+                    elif botellas_dev > 0 and botellas_orig > 0 and cajas_dev == 0:
+                        subtotal = (importe_orig / botellas_orig) * botellas_dev
+                    elif cajas_dev > 0 and cajas_orig > 0 and botellas_dev > 0 and botellas_orig > 0:
+                        p_caja = importe_orig / cajas_orig
+                        p_bot = importe_orig / botellas_orig
+                        subtotal = (p_caja * cajas_dev) + (p_bot * botellas_dev)
 
-    origen = coincidencias.iloc[0]
+                    # Añadimos a la lista en sesión
+                    st.session_state["lista_devoluciones_activas"].append({
+                        "Código": str(orig["Código"]),
+                        "Producto": orig["Producto"],
+                        "Cliente": orig["Cliente"],
+                        "Pagina": orig["Pagina"],
+                        "Cajas Dev.": cajas_dev,
+                        "Botellas Dev.": botellas_dev,
+                        "Subtotal Devolución": subtotal,
+                        "Estado": "Calculado correctamente",
+                    })
+                    agregados += 1
 
-    cajas_originales = float(origen["Cajas"])
-    botellas_originales = float(origen["Botellas"])
-    importe_original = float(origen["Importe_Total"])
-    pagina_origen = origen["Pagina"]
-    nombre_cliente = origen["Cliente"]
-    nombre_producto = origen["Producto"]
-
-    subtotal = 0.0
-
-    if cajas_dev > 0 and cajas_originales > 0 and botellas_dev == 0:
-        precio_por_caja = importe_original / cajas_originales
-        subtotal = precio_por_caja * cajas_dev
-
-    elif botellas_dev > 0 and botellas_originales > 0 and cajas_dev == 0:
-        precio_por_botella = importe_original / botellas_originales
-        subtotal = precio_por_botella * botellas_dev
-
-    elif cajas_dev > 0 and cajas_originales > 0 and botellas_dev > 0 and botellas_originales > 0:
-        precio_por_caja = importe_original / cajas_originales
-        precio_por_botella = importe_original / botellas_originales
-        subtotal = (
-            precio_por_caja * cajas_dev
-            + precio_por_botella * botellas_dev
-        )
+            if agregados > 0:
+                st.success(f"¡Se agregaron {agregados} registro(s) de devolución exitosamente!")
+                st.rerun()
+            else:
+                st.warning("Por favor marca la casilla '¿Devolver?' y coloca cantidades mayores a 0 en al menos una tienda.")
     else:
-        # Si no hay desglose exacto pero hay importe original único
-        subtotal = 0.0
-
-    total_valor_devuelto += subtotal
-
-    resumen_devoluciones.append(
-        {
-            "Código": codigo_ingresado,
-            "Producto": nombre_producto,
-            "Cliente": nombre_cliente,
-            "Pagina": pagina_origen,
-            "Cajas Dev.": cajas_dev,
-            "Botellas Dev.": botellas_dev,
-            "Subtotal Devolución": subtotal,
-            "Estado": "Calculado correctamente",
-        }
-    )
+      st.info("No hay registros para este código en la ruta seleccionada.")
 
 
 # ============================================================
-# MOSTRAR RESULTADOS Y DESCARGA PDF
+# RESUMEN FINANCIERO Y TABLA DE DEVOLUCIONES ACTIVAS
 # ============================================================
 
 st.divider()
-st.subheader("📋 Resumen financiero de devoluciones")
+st.subheader("📋 Resumen financiero de devoluciones incorporadas")
 
-if resumen_devoluciones:
-    df_resumen = pd.DataFrame(resumen_devoluciones)
+# Opción para limpiar la lista si el usuario lo desea
+if st.session_state["lista_devoluciones_activas"]:
+    if st.button("🗑️ Limpiar todas las devoluciones"):
+        st.session_state["lista_devoluciones_activas"] = []
+        st.rerun()
+
+    df_resumen = pd.DataFrame(st.session_state["lista_devoluciones_activas"])
     
     st.dataframe(
         df_resumen.style.format({
@@ -1044,8 +978,11 @@ if resumen_devoluciones:
         }),
         use_container_width=True,
     )
+    
+    total_valor_devuelto = df_resumen["Subtotal Devolución"].sum()
 else:
-    st.info("Aún no se han registrado devoluciones válidas.")
+    st.info("Aún no se han incorporado devoluciones a la lista. Utiliza el buscador superior para seleccionarlas.")
+    total_valor_devuelto = 0.0
 
 neto_a_liquidar = (total_libro_ruta if total_libro_ruta else 0.0) - total_valor_devuelto
 
@@ -1070,6 +1007,8 @@ fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
 if st.button("📄 Crear PDF para Imprimir"):
     if total_libro_ruta is None:
         st.error("No se puede generar el PDF porque falta el total de contado de la ruta.")
+    elif not st.session_state["lista_devoluciones_activas"]:
+        st.error("No hay devoluciones registradas para incluir en el comprobante.")
     else:
         pdf_bytes = generar_comprobante_pdf(
             ruta=ruta_elegida,
@@ -1078,7 +1017,7 @@ if st.button("📄 Crear PDF para Imprimir"):
             total_credito=total_credito_ruta,
             total_devoluciones=total_valor_devuelto,
             neto_liquidar=neto_a_liquidar,
-            devoluciones=resumen_devoluciones,
+            devoluciones=st.session_state["lista_devoluciones_activas"],
         )
 
         st.download_button(
