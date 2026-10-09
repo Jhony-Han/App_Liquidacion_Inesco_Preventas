@@ -231,19 +231,26 @@ def analizar_producto(linea):
 # ============================================================
 # DETECCIÓN DE TOTALES GENERALES (EXACTO Y SEGURO)
 # ============================================================
+# ============================================================
+# DETECCIÓN DE TOTALES GENERALES (AJUSTADO Y PRECISO)
+# ============================================================
 
 def detectar_total_contado(texto_pagina):
     if not texto_pagina:
         return None
 
-    lineas = texto_pagina.splitlines()
-    for linea in lineas:
-        if "Total Venta de Contado CO" in linea or "Total" in linea and "Contado" in linea:
-            partes = linea.split()
-            for p in partes:
-                val = dinero_a_numero(p)
-                if val > 100000:  # Valor realista de contado para ruta
-                    return val
+    texto = re.sub(r"\s+", " ", texto_pagina).strip()
+
+    patron = re.compile(
+        r"Total\s+Venta\s+de\s+Contado\s+CO\s+([\d.,]+)",
+        re.IGNORECASE,
+    )
+
+    coincidencia = patron.search(texto)
+
+    if coincidencia:
+        return dinero_a_numero(coincidencia.group(1))
+
     return None
 
 
@@ -251,15 +258,23 @@ def detectar_total_credito(texto_pagina):
     if not texto_pagina:
         return None
 
-    lineas = texto_pagina.splitlines()
-    for linea in lineas:
-        if "Crédito" in linea or "Credito" in linea or "CréditoFormal" in linea:
-            partes = linea.split()
-            for p in partes:
-                val = dinero_a_numero(p)
-                if val > 10000:
-                    return val
-    return None
+    texto = re.sub(r"\s+", " ", texto_pagina).strip()
+
+    # Patrón estricto para capturar el total de crédito formal de la ruta sin confundirlo con códigos o facturas
+    patron = re.compile(
+        r"Total\s+Vta\s+Cr[ée]dito\s*Formal\s+CO\s+([\d.,]+)",
+        re.IGNORECASE,
+    )
+
+    coincidencia = patron.search(texto)
+
+    if coincidencia:
+        valor = dinero_a_numero(coincidencia.group(1))
+        # Filtro de seguridad: un crédito formal por ruta no debe superar los 50 millones
+        if valor < 50000000:
+            return valor
+
+    return 0.0
 
 
 def rutas_de_resumen_en_pagina(texto):
@@ -299,15 +314,15 @@ def extraer_datos_completos(contenido_pdf):
                     ruta_actual = r_cand
                     rutas_detectadas.add(ruta_actual)
 
-            # Detectar totales generales
+           # Detectar totales generales
             total_contado = detectar_total_contado(texto)
             total_credito = detectar_total_credito(texto)
 
-            if total_contado is not None or total_credito is not None:
-                if total_contado is not None:
-                    totales_contado[ruta_actual] = total_contado
-                if total_credito is not None:
-                    totales_credito[ruta_actual] = total_credito
+            if total_contado is not None:
+                totales_contado[ruta_actual] = total_contado
+            
+            if total_credito is not None and total_credito > 0:
+                totales_credito[ruta_actual] = total_credito
 
             lineas = texto.splitlines()
 
