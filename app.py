@@ -231,9 +231,6 @@ def analizar_producto(linea):
 # ============================================================
 # DETECCIÓN DE TOTALES GENERALES (EXACTO Y SEGURO)
 # ============================================================
-# ============================================================
-# DETECCIÓN DE TOTALES GENERALES (AJUSTADO Y PRECISO)
-# ============================================================
 
 def detectar_total_contado(texto_pagina):
     if not texto_pagina:
@@ -260,7 +257,7 @@ def detectar_total_credito(texto_pagina):
 
     texto = re.sub(r"\s+", " ", texto_pagina).strip()
 
-    # Patrón estricto para capturar el total de crédito formal de la ruta sin confundirlo con códigos o facturas
+    # Patrón seguro para capturar el total de crédito formal de la ruta
     patron = re.compile(
         r"Total\s+Vta\s+Cr[ée]dito\s*Formal\s+CO\s+([\d.,]+)",
         re.IGNORECASE,
@@ -270,8 +267,7 @@ def detectar_total_credito(texto_pagina):
 
     if coincidencia:
         valor = dinero_a_numero(coincidencia.group(1))
-        # Filtro de seguridad: un crédito formal por ruta no debe superar los 50 millones
-        if valor < 50000000:
+        if valor < 50000000:  # Filtro lógico para evitar valores desproporcionados
             return valor
 
     return 0.0
@@ -308,19 +304,17 @@ def extraer_datos_completos(contenido_pdf):
             if not texto:
                 continue
 
-            # Detectar ruta activa en la página (estrictamente oficiales)
             for r_cand in ["ML3E51", "ML3E52", "ML3E53"]:
                 if r_cand in texto.upper():
                     ruta_actual = r_cand
                     rutas_detectadas.add(ruta_actual)
 
-           # Detectar totales generales
             total_contado = detectar_total_contado(texto)
             total_credito = detectar_total_credito(texto)
 
             if total_contado is not None:
                 totales_contado[ruta_actual] = total_contado
-            
+
             if total_credito is not None and total_credito > 0:
                 totales_credito[ruta_actual] = total_credito
 
@@ -364,7 +358,6 @@ def extraer_datos_completos(contenido_pdf):
 
                 registros.append(producto)
 
-            # Extracción complementaria por tablas nativas
             tablas = pagina.extract_tables()
             for tabla in tablas:
                 for fila in tabla:
@@ -432,7 +425,6 @@ def extraer_datos_completos(contenido_pdf):
         df = df.drop_duplicates(subset=["Ruta", "Cliente", "Código", "Importe_Total"], keep="first")
         df = df.reset_index(drop=True)
 
-    # Asegurar que solo queden rutas oficiales válidas
     rutas_validas = sorted([r for r in rutas_detectadas if r in ["ML3E51", "ML3E52", "ML3E53"]])
     if not rutas_validas:
         rutas_validas = ["ML3E51"]
@@ -447,7 +439,7 @@ def extraer_datos_completos(contenido_pdf):
 
 
 # ============================================================
-# GENERAR UN PDF DE IMPRESIÓN PROFESIONAL
+# GENERAR UN PDF DE IMPRESIÓN PROFESIONAL (INTACTO Y HERMOSO)
 # ============================================================
 
 def generar_comprobante_pdf(
