@@ -85,7 +85,6 @@ def dinero_a_numero(valor):
     elif texto.count(".") > 1:
         texto = texto.replace(".", "")
     elif "." in texto:
-        # En este libro los puntos suelen separar miles.
         texto = texto.replace(".", "")
     elif "," in texto:
         texto = texto.replace(",", ".")
@@ -206,11 +205,6 @@ PATRON_PRODUCTO = re.compile(
 def analizar_producto(linea):
     """
     Lee una línea de producto del libro.
-
-    Ejemplos:
-    4057637803 402537714 160318 CC 400ML 2 30.000 60.000
-    4057624469 402537714 056705 QTC350 0 / 15 62.500 31.250
-
     El IMPORTE se lee del PDF, no se recalcula con el precio.
     """
     coincidencia = PATRON_PRODUCTO.match(linea.strip())
@@ -255,8 +249,6 @@ def detectar_total_contado(texto_pagina):
     """
     Busca exclusivamente el resumen general:
     Total Venta de Contado CO 7.110.218
-
-    No toma los 'Total a Cobrar' de cada cliente.
     """
     if not texto_pagina:
         return None
@@ -298,13 +290,6 @@ def detectar_total_credito(texto_pagina):
 
 
 def rutas_de_resumen_en_pagina(texto):
-    """
-    Obtiene la ruta asociada a un resumen.
-
-    Primero utiliza el campo explícito 'Ruta:'.
-    Si no existe, usa el código de ruta impreso en el
-    encabezado o pie de página.
-    """
     rutas_explicitas = re.findall(
         r"Ruta\s*:\s*(ML3E\d+)",
         texto,
@@ -351,9 +336,6 @@ def extraer_datos_completos(contenido_pdf):
 
             lineas = texto.splitlines()
 
-            # ------------------------------------------------
-            # A. Buscar resumen general en toda la página
-            # ------------------------------------------------
             total_contado = detectar_total_contado(texto)
             total_credito = detectar_total_credito(texto)
 
@@ -363,8 +345,6 @@ def extraer_datos_completos(contenido_pdf):
             ):
                 rutas_resumen = rutas_de_resumen_en_pagina(texto)
 
-                # Guardar un total solamente si la página
-                # identifica una ruta de manera inequívoca.
                 if len(rutas_resumen) == 1:
                     ruta_resumen = rutas_resumen[0]
                     rutas_detectadas.add(ruta_resumen)
@@ -381,9 +361,6 @@ def extraer_datos_completos(contenido_pdf):
                         "más de una ruta; no se asignó automáticamente."
                     )
 
-            # ------------------------------------------------
-            # B. Leer clientes y productos
-            # ------------------------------------------------
             for indice, linea in enumerate(lineas):
                 linea_limpia = linea.strip()
 
@@ -397,8 +374,6 @@ def extraer_datos_completos(contenido_pdf):
                     numero_cliente_actual = encabezado["numero_cliente"]
                     rutas_detectadas.add(ruta_actual)
 
-                    # El nombre del establecimiento suele estar
-                    # en la línea siguiente al encabezado.
                     cliente_actual = "CLIENTE SIN IDENTIFICAR"
 
                     for siguiente in lineas[indice + 1:indice + 3]:
@@ -431,7 +406,6 @@ def extraer_datos_completos(contenido_pdf):
                 if producto is None:
                     continue
 
-                # Nunca asignar un producto a una ruta inventada.
                 if not ruta_actual:
                     errores_lectura.append(
                         f"Página {numero_pagina}: se encontró una línea "
@@ -465,8 +439,6 @@ def extraer_datos_completos(contenido_pdf):
     df = pd.DataFrame(registros, columns=columnas)
 
     if not df.empty:
-        # No se eliminan filas solo porque tengan mismo producto:
-        # pueden ser pedidos/promociones diferentes.
         df = df.reset_index(drop=True)
 
     return (
@@ -491,10 +463,6 @@ def generar_comprobante_pdf(
     neto_liquidar,
     devoluciones,
 ):
-    """
-    Crea un PDF real tamaño carta.
-    Se descarga desde Streamlit y se imprime normalmente.
-    """
     buffer = io.BytesIO()
 
     documento = SimpleDocTemplate(
@@ -542,15 +510,6 @@ def generar_comprobante_pdf(
             parent=estilos["BodyText"],
             fontSize=8,
             leading=10,
-        )
-    )
-
-    estilos.add(
-        ParagraphStyle(
-            name="ValorDerecha",
-            parent=estilos["BodyText"],
-            fontName="Helvetica-Bold",
-            alignment=TA_RIGHT,
         )
     )
 
@@ -635,23 +594,18 @@ def generar_comprobante_pdf(
             [
                 str(devolucion.get("Código", "")),
                 Paragraph(
-                    html.escape(str(devolucion.get("Producto", "")),
-                                quote=False),
+                    html.escape(str(devolucion.get("Producto", "")), quote=False),
                     estilos["TextoPequeno"],
                 ),
                 Paragraph(
-                    html.escape(str(devolucion.get("Cliente", "")),
-                                quote=False),
+                    html.escape(str(devolucion.get("Cliente", "")), quote=False),
                     estilos["TextoPequeno"],
                 ),
                 str(devolucion.get("Cajas Dev.", 0)),
                 str(devolucion.get("Botellas Dev.", 0)),
-                formato_pesos(
-                    devolucion.get("Subtotal Devolución", 0)
-                ),
+                formato_pesos(devolucion.get("Subtotal Devolución", 0)),
                 Paragraph(
-                    html.escape(str(devolucion.get("Estado", "Calculado")),
-                                quote=False),
+                    html.escape(str(devolucion.get("Estado", "Calculado")), quote=False),
                     estilos["TextoPequeno"],
                 ),
             ]
@@ -694,8 +648,7 @@ def generar_comprobante_pdf(
                 ("FONTSIZE", (0, 0), (-1, 0), 8),
                 ("FONTSIZE", (0, 1), (-1, -1), 8),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-                 [colors.white, colors.HexColor("#F7F9FC")]),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F9FC")]),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("ALIGN", (3, 1), (5, -1), "RIGHT"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 5),
@@ -864,9 +817,7 @@ if df_entregas.empty:
     )
     st.stop()
 
-st.success(
-    f"PDF leído. Productos detectados: {len(df_entregas)}"
-)
+st.success(f"PDF leído. Productos detectados: {len(df_entregas)}")
 
 
 # ============================================================
@@ -899,7 +850,6 @@ with st.expander("🔍 Diagnóstico de lectura del PDF"):
         st.warning("Advertencias de lectura:")
         for error in errores_lectura[:30]:
             st.write(f"- {error}")
-
     else:
         st.caption("No se detectaron advertencias estructurales.")
 
@@ -1101,7 +1051,6 @@ for _, fila in devoluciones_ingresadas.iterrows():
         )
         continue
 
-    # Si se especifica cliente, intentar seleccionar su registro.
     if cliente_elegido:
         filtradas = coincidencias[
             coincidencias["Cliente"].astype(str).str.contains(
@@ -1128,8 +1077,6 @@ for _, fila in devoluciones_ingresadas.iterrows():
 
         coincidencias = filtradas
 
-    # Para evitar inventar precios, seleccionar solo si existe
-    # una única fila de origen compatible.
     if len(coincidencias) != 1:
         resumen_devoluciones.append(
             {
@@ -1155,8 +1102,6 @@ for _, fila in devoluciones_ingresadas.iterrows():
     botellas_originales = float(origen["Botellas"])
     importe_original = float(origen["Importe_Total"])
 
-    # Se calcula proporcionalmente a la cantidad de la línea.
-    # No se asume un tamaño universal de caja.
     if cajas_dev > 0 and cajas_originales > 0 and botellas_dev == 0:
         precio_por_caja = importe_original / cajas_originales
         subtotal = precio_por_caja * cajas_dev
@@ -1185,194 +1130,85 @@ for _, fila in devoluciones_ingresadas.iterrows():
                 "Botellas Dev.": botellas_dev,
                 "Precio Unitario (Botella)": 0.0,
                 "Subtotal Devolución": 0.0,
-                "Estado": "La cantidad no coincide con la presentación leída",
+                "Estado": "No se pudo calcular proporcionalmente",
             }
         )
         continue
 
-    if subtotal <= 0:
-        estado = "Valor no calculable"
-    else:
-        estado = "Calculado"
-        total_valor_devuelto += subtotal
+    total_valor_devuelto += subtotal
 
     resumen_devoluciones.append(
         {
-            "Código": origen["Código"],
+            "Código": codigo_ingresado,
             "Producto": origen["Producto"],
             "Cliente": origen["Cliente"],
             "Cajas Dev.": cajas_dev,
             "Botellas Dev.": botellas_dev,
             "Precio Unitario (Botella)": precio_unitario,
             "Subtotal Devolución": subtotal,
-            "Estado": estado,
+            "Estado": "Calculado correctamente",
         }
     )
 
 
 # ============================================================
-# MOSTRAR RESUMEN DE DEVOLUCIONES
+# MOSTRAR RESULTADOS Y DESCARGA PDF
 # ============================================================
 
 st.divider()
-st.subheader("📋 Resumen de devoluciones")
+st.subheader("📋 Resumen financiero de devoluciones")
 
 if resumen_devoluciones:
     df_resumen = pd.DataFrame(resumen_devoluciones)
-
+    
     st.dataframe(
-        df_resumen.style.format(
-            {
-                "Precio Unitario (Botella)": "${:,.0f}",
-                "Subtotal Devolución": "${:,.0f}",
-            }
-        ),
+        df_resumen.style.format({
+            "Precio Unitario (Botella)": "${:,.0f}",
+            "Subtotal Devolución": "${:,.0f}",
+        }),
         use_container_width=True,
     )
 else:
-    df_resumen = pd.DataFrame(
-        columns=[
-            "Código",
-            "Producto",
-            "Cliente",
-            "Cajas Dev.",
-            "Botellas Dev.",
-            "Precio Unitario (Botella)",
-            "Subtotal Devolución",
-            "Estado",
-        ]
-    )
+    st.info("Aún no se han registrado devoluciones válidas.")
 
-    st.info("Registra una devolución para ver el resumen.")
-
-
-# ============================================================
-# LIQUIDACIÓN
-# ============================================================
-
-if total_libro_ruta is not None:
-    neto_a_liquidar = total_libro_ruta - total_valor_devuelto
-else:
-    neto_a_liquidar = None
+neto_a_liquidar = (total_libro_ruta if total_libro_ruta else 0.0) - total_valor_devuelto
 
 st.divider()
-st.subheader("💰 Liquidación de la ruta")
-
-c1, c2, c3 = st.columns(3)
-
-if total_libro_ruta is None:
-    c1.metric("Venta de contado", "No detectada")
-else:
-    c1.metric("Venta de contado", formato_pesos(total_libro_ruta))
-
-c2.metric(
-    "Devoluciones calculadas",
-    "- " + formato_pesos(total_valor_devuelto),
+c_res1, c_res2 = st.columns(2)
+c_res1.metric(
+    "Total devoluciones a descontar",
+    f"- {formato_pesos(total_valor_devuelto)}",
+    delta_color="inverse",
+)
+c_res2.metric(
+    "Neto a liquidar (Cruce con LiquiYa)",
+    formato_pesos(neto_a_liquidar),
+    delta="Cruce esperado",
 )
 
-if neto_a_liquidar is None:
-    c3.metric("Neto a liquidar", "Pendiente")
-else:
-    c3.metric("Neto a liquidar", formato_pesos(neto_a_liquidar))
-
-
-# ============================================================
-# TRAZABILIDAD
-# ============================================================
-
 st.divider()
-st.subheader("🏪 Clientes que recibieron los productos")
+st.subheader("🖨️ Generar Comprobante PDF")
 
-codigos_registrados = {
-    clave_codigo(item["Código"])
-    for item in resumen_devoluciones
-    if item.get("Código")
-}
+fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-for codigo_key in sorted(codigos_registrados):
-    clientes_producto = df_ruta_actual[
-        df_ruta_actual["Codigo_Key"] == codigo_key
-    ]
-
-    if clientes_producto.empty:
-        continue
-
-    nombre = clientes_producto.iloc[0]["Producto"]
-
-    with st.expander(f"{nombre} — código normalizado {codigo_key}"):
-        st.dataframe(
-            clientes_producto[
-                [
-                    "NumeroCliente",
-                    "Cliente",
-                    "Código",
-                    "Producto",
-                    "Cajas",
-                    "Botellas",
-                    "Precio_Unitario",
-                    "Importe_Total",
-                ]
-            ].style.format(
-                {
-                    "Precio_Unitario": "${:,.0f}",
-                    "Importe_Total": "${:,.0f}",
-                }
-            ),
-            use_container_width=True,
+if st.button("📄 Crear PDF para Imprimir"):
+    if total_libro_ruta is None:
+        st.error("No se puede generar el PDF porque falta el total de contado de la ruta.")
+    else:
+        pdf_bytes = generar_comprobante_pdf(
+            ruta=ruta_elegida,
+            fecha=fecha_actual,
+            total_contado=total_libro_ruta,
+            total_credito=total_credito_ruta,
+            total_devoluciones=total_valor_devuelto,
+            neto_liquidar=neto_a_liquidar,
+            devoluciones=resumen_devoluciones,
         )
 
-
-# ============================================================
-# DESCARGA DE COMPROBANTE PDF
-# ============================================================
-
-st.divider()
-st.subheader("🧾 Comprobante profesional para imprimir")
-
-st.write(
-    "Genera un PDF independiente, tamaño carta horizontal, "
-    "con el resumen financiero, el detalle de devoluciones "
-    "y los espacios de firmas."
-)
-
-if total_libro_ruta is None:
-    st.warning(
-        "No se puede generar una liquidación definitiva hasta "
-        "que el valor de contado se lea correctamente."
-    )
-elif st.button("🧾 Generar comprobante PDF", type="primary"):
-    fecha_comprobante = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-    pdf_comprobante = generar_comprobante_pdf(
-        ruta=ruta_elegida,
-        fecha=fecha_comprobante,
-        total_contado=total_libro_ruta,
-        total_credito=total_credito_ruta,
-        total_devoluciones=total_valor_devuelto,
-        neto_liquidar=neto_a_liquidar,
-        devoluciones=resumen_devoluciones,
-    )
-
-    st.download_button(
-        label="⬇️ Descargar comprobante para imprimir",
-        data=pdf_comprobante,
-        file_name=f"Comprobante_Devolucion_{ruta_elegida}.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
-
-    st.success(
-        "Comprobante generado. Descárgalo y ábrelo para imprimirlo "
-        "o guardarlo."
-    )
-
-
-# ============================================================
-# CATÁLOGO DE RUTA
-# ============================================================
-
-with st.expander("📦 Ver catálogo completo de esta ruta"):
-    st.dataframe(
-        df_ruta_actual,
-        use_container_width=True,
-    )
+        st.download_button(
+            label="📥 Descargar Comprobante PDF",
+            data=pdf_bytes,
+            file_name=f"Comprobante_Devolucion_{ruta_elegida}.pdf",
+            mime="application/pdf",
+        )
+        st.success("¡Comprobante generado con éxito listo para descargar!")
