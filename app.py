@@ -1002,7 +1002,10 @@ c_res2.metric(
 st.divider()
 st.subheader("🖨️ Generar Comprobante PDF")
 
-fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
+from datetime import timedelta
+
+# Ajuste automático a la hora local de Colombia (-5 horas respecto a UTC)
+fecha_actual = (datetime.utcnow() - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
 
 if st.button("📄 Crear PDF para Imprimir"):
     if total_libro_ruta is None:
